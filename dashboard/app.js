@@ -1,7 +1,7 @@
 /* ============================================================
    ESP32 POWER MONITOR DASHBOARD — JAVASCRIPT
-   Simulated real-time data for UI demonstration
-   Replace the simulation with your ESP32 WebSocket/HTTP data
+   NO SIMULATION — Waits for real ESP32 data
+   Connect your ESP32 via WebSocket / HTTP / Serial bridge
    ============================================================ */
 
 // ===== CONFIGURATION =====
@@ -11,9 +11,7 @@ const CONFIG = {
   voltageMax: 300,          // Max gauge range
   currentMax: 20,
   powerMax: 4000,
-  sampleInterval: 1000,     // ms
   maxDataPoints: 60,
-  voltageNominal: 230,
   voltageHighThreshold: 250,
   voltageLowThreshold: 200,
   currentMaxThreshold: 15,
@@ -35,6 +33,8 @@ const state = {
   peakPower: { value: 0, time: '--' },
   uptimeStart: Date.now(),
   logEntries: [],
+  lastUpdateTime: Date.now(),
+  connected: false,
 };
 
 // ===== CHART.JS SETUP =====
@@ -50,6 +50,29 @@ function createGradient(ctx, colorStart, colorEnd) {
   return g;
 }
 
+const defaultChartOptions = (color, borderColor) => ({
+  responsive: true,
+  maintainAspectRatio: false,
+  plugins: {
+    legend: { display: false },
+    tooltip: {
+      backgroundColor: 'rgba(17,24,39,0.95)',
+      borderColor: borderColor,
+      borderWidth: 1,
+      titleFont: { weight: '600' },
+      bodyFont: { family: "'JetBrains Mono', monospace" },
+      padding: 12,
+      cornerRadius: 8,
+    }
+  },
+  scales: {
+    x: { display: true, grid: { display: false }, ticks: { maxTicksLimit: 8 } },
+    y: { display: true, grid: { color: 'rgba(255,255,255,0.03)' } },
+  },
+  interaction: { intersect: false, mode: 'index' },
+  animation: { duration: 400 },
+});
+
 // Voltage Chart
 const voltageCtx = document.getElementById('voltageChart').getContext('2d');
 const voltageChart = new Chart(voltageCtx, {
@@ -61,40 +84,16 @@ const voltageChart = new Chart(voltageCtx, {
       data: [],
       borderColor: '#38bdf8',
       backgroundColor: createGradient(voltageCtx, 'rgba(56,189,248,0.15)', 'rgba(56,189,248,0)'),
-      fill: true,
-      tension: 0.4,
-      borderWidth: 2,
-      pointRadius: 0,
-      pointHoverRadius: 4,
-      pointHoverBackgroundColor: '#38bdf8',
+      fill: true, tension: 0.4, borderWidth: 2,
+      pointRadius: 0, pointHoverRadius: 4, pointHoverBackgroundColor: '#38bdf8',
     }]
   },
   options: {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: { display: false },
-      tooltip: {
-        backgroundColor: 'rgba(17,24,39,0.95)',
-        borderColor: 'rgba(56,189,248,0.2)',
-        borderWidth: 1,
-        titleFont: { weight: '600' },
-        bodyFont: { family: "'JetBrains Mono', monospace" },
-        padding: 12,
-        cornerRadius: 8,
-      }
-    },
+    ...defaultChartOptions('#38bdf8', 'rgba(56,189,248,0.2)'),
     scales: {
       x: { display: true, grid: { display: false }, ticks: { maxTicksLimit: 8 } },
-      y: {
-        display: true,
-        grid: { color: 'rgba(255,255,255,0.03)' },
-        suggestedMin: 200,
-        suggestedMax: 260,
-      },
+      y: { display: true, grid: { color: 'rgba(255,255,255,0.03)' }, suggestedMin: 200, suggestedMax: 260 },
     },
-    interaction: { intersect: false, mode: 'index' },
-    animation: { duration: 400 },
   }
 });
 
@@ -109,31 +108,16 @@ const currentChart = new Chart(currentCtx, {
       data: [],
       borderColor: '#a78bfa',
       backgroundColor: createGradient(currentCtx, 'rgba(167,139,250,0.15)', 'rgba(167,139,250,0)'),
-      fill: true,
-      tension: 0.4,
-      borderWidth: 2,
-      pointRadius: 0,
-      pointHoverRadius: 4,
-      pointHoverBackgroundColor: '#a78bfa',
+      fill: true, tension: 0.4, borderWidth: 2,
+      pointRadius: 0, pointHoverRadius: 4, pointHoverBackgroundColor: '#a78bfa',
     }]
   },
   options: {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: { legend: { display: false }, tooltip: {
-      backgroundColor: 'rgba(17,24,39,0.95)',
-      borderColor: 'rgba(167,139,250,0.2)',
-      borderWidth: 1,
-      padding: 12,
-      cornerRadius: 8,
-      bodyFont: { family: "'JetBrains Mono', monospace" },
-    }},
+    ...defaultChartOptions('#a78bfa', 'rgba(167,139,250,0.2)'),
     scales: {
       x: { display: true, grid: { display: false }, ticks: { maxTicksLimit: 8 } },
       y: { display: true, grid: { color: 'rgba(255,255,255,0.03)' }, suggestedMin: 0, suggestedMax: 10 },
     },
-    interaction: { intersect: false, mode: 'index' },
-    animation: { duration: 400 },
   }
 });
 
@@ -148,36 +132,20 @@ const powerChart = new Chart(powerCtx, {
       data: [],
       borderColor: '#fb923c',
       backgroundColor: createGradient(powerCtx, 'rgba(251,146,60,0.15)', 'rgba(251,146,60,0)'),
-      fill: true,
-      tension: 0.4,
-      borderWidth: 2,
-      pointRadius: 0,
-      pointHoverRadius: 4,
-      pointHoverBackgroundColor: '#fb923c',
+      fill: true, tension: 0.4, borderWidth: 2,
+      pointRadius: 0, pointHoverRadius: 4, pointHoverBackgroundColor: '#fb923c',
     }]
   },
   options: {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: { legend: { display: false }, tooltip: {
-      backgroundColor: 'rgba(17,24,39,0.95)',
-      borderColor: 'rgba(251,146,60,0.2)',
-      borderWidth: 1,
-      padding: 12,
-      cornerRadius: 8,
-      bodyFont: { family: "'JetBrains Mono', monospace" },
-    }},
+    ...defaultChartOptions('#fb923c', 'rgba(251,146,60,0.2)'),
     scales: {
       x: { display: true, grid: { display: false }, ticks: { maxTicksLimit: 8 } },
       y: { display: true, grid: { color: 'rgba(255,255,255,0.03)' }, suggestedMin: 0 },
     },
-    interaction: { intersect: false, mode: 'index' },
-    animation: { duration: 400 },
   }
 });
 
-// ===== ANALYTICS CHARTS =====
-// Power Distribution (Bar chart)
+// ===== ANALYTICS CHARTS (static placeholders until data flows) =====
 const powerDistCtx = document.getElementById('powerDistChart').getContext('2d');
 const powerDistChart = new Chart(powerDistCtx, {
   type: 'bar',
@@ -185,17 +153,13 @@ const powerDistChart = new Chart(powerDistCtx, {
     labels: ['12AM', '2AM', '4AM', '6AM', '8AM', '10AM', '12PM', '2PM', '4PM', '6PM', '8PM', '10PM'],
     datasets: [{
       label: 'Power (W)',
-      data: [120, 80, 60, 150, 450, 800, 1200, 900, 750, 1100, 680, 300],
+      data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
       backgroundColor: createGradient(powerDistCtx, 'rgba(251,146,60,0.6)', 'rgba(251,146,60,0.1)'),
-      borderColor: '#fb923c',
-      borderWidth: 1,
-      borderRadius: 6,
-      barPercentage: 0.6,
+      borderColor: '#fb923c', borderWidth: 1, borderRadius: 6, barPercentage: 0.6,
     }]
   },
   options: {
-    responsive: true,
-    maintainAspectRatio: false,
+    responsive: true, maintainAspectRatio: false,
     plugins: { legend: { display: false } },
     scales: {
       x: { grid: { display: false } },
@@ -204,27 +168,12 @@ const powerDistChart = new Chart(powerDistCtx, {
   }
 });
 
-// Voltage Stability (scatter)
 const voltStabCtx = document.getElementById('voltageStabilityChart').getContext('2d');
-const voltStabData = [];
-for (let i = 0; i < 50; i++) {
-  voltStabData.push({ x: i, y: 220 + Math.random() * 20 - 5 });
-}
 const voltageStabilityChart = new Chart(voltStabCtx, {
   type: 'scatter',
-  data: {
-    datasets: [{
-      label: 'Voltage (V)',
-      data: voltStabData,
-      backgroundColor: 'rgba(56,189,248,0.5)',
-      borderColor: '#38bdf8',
-      borderWidth: 1,
-      pointRadius: 3,
-    }]
-  },
+  data: { datasets: [{ label: 'Voltage (V)', data: [], backgroundColor: 'rgba(56,189,248,0.5)', borderColor: '#38bdf8', borderWidth: 1, pointRadius: 3 }] },
   options: {
-    responsive: true,
-    maintainAspectRatio: false,
+    responsive: true, maintainAspectRatio: false,
     plugins: { legend: { display: false } },
     scales: {
       x: { grid: { display: false }, title: { display: true, text: 'Sample', color: '#64748b' } },
@@ -233,40 +182,23 @@ const voltageStabilityChart = new Chart(voltStabCtx, {
   }
 });
 
-// Load Profile (doughnut)
 const loadProfCtx = document.getElementById('loadProfileChart').getContext('2d');
 const loadProfileChart = new Chart(loadProfCtx, {
   type: 'doughnut',
   data: {
     labels: ['Light Load (<500W)', 'Medium Load (500-1500W)', 'Heavy Load (>1500W)', 'Idle'],
     datasets: [{
-      data: [35, 40, 15, 10],
-      backgroundColor: [
-        'rgba(56,189,248,0.7)',
-        'rgba(167,139,250,0.7)',
-        'rgba(251,146,60,0.7)',
-        'rgba(100,116,139,0.5)',
-      ],
-      borderColor: 'transparent',
-      borderWidth: 0,
-      hoverOffset: 8,
+      data: [0, 0, 0, 100],
+      backgroundColor: ['rgba(56,189,248,0.7)', 'rgba(167,139,250,0.7)', 'rgba(251,146,60,0.7)', 'rgba(100,116,139,0.5)'],
+      borderColor: 'transparent', borderWidth: 0, hoverOffset: 8,
     }]
   },
   options: {
-    responsive: true,
-    maintainAspectRatio: false,
-    cutout: '65%',
-    plugins: {
-      legend: {
-        position: 'bottom',
-        labels: { padding: 14, usePointStyle: true, pointStyleWidth: 10, font: { size: 11 } }
-      },
-    }
+    responsive: true, maintainAspectRatio: false, cutout: '65%',
+    plugins: { legend: { position: 'bottom', labels: { padding: 14, usePointStyle: true, pointStyleWidth: 10, font: { size: 11 } } } },
   }
 });
 
-// Energy Trend (7 days bar)
-const energyTrendCtx = document.getElementById('energyTrendChart').getContext('2d');
 const days = [];
 const now = new Date();
 for (let i = 6; i >= 0; i--) {
@@ -274,23 +206,20 @@ for (let i = 6; i >= 0; i--) {
   d.setDate(d.getDate() - i);
   days.push(d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }));
 }
+const energyTrendCtx = document.getElementById('energyTrendChart').getContext('2d');
 const energyTrendChart = new Chart(energyTrendCtx, {
   type: 'bar',
   data: {
     labels: days,
     datasets: [{
       label: 'Energy (kWh)',
-      data: [12.4, 14.2, 9.8, 15.6, 11.3, 13.7, 0],
+      data: [0, 0, 0, 0, 0, 0, 0],
       backgroundColor: createGradient(energyTrendCtx, 'rgba(52,211,153,0.6)', 'rgba(52,211,153,0.1)'),
-      borderColor: '#34d399',
-      borderWidth: 1,
-      borderRadius: 8,
-      barPercentage: 0.5,
+      borderColor: '#34d399', borderWidth: 1, borderRadius: 8, barPercentage: 0.5,
     }]
   },
   options: {
-    responsive: true,
-    maintainAspectRatio: false,
+    responsive: true, maintainAspectRatio: false,
     plugins: { legend: { display: false } },
     scales: {
       x: { grid: { display: false } },
@@ -300,9 +229,9 @@ const energyTrendChart = new Chart(energyTrendCtx, {
 });
 
 
-// ===== GAUGE UPDATE FUNCTIONS =====
+// ===== GAUGE UPDATE =====
 function setGauge(fillEl, value, max) {
-  const circumference = 2 * Math.PI * 85; // ~534
+  const circumference = 2 * Math.PI * 85;
   const ratio = Math.min(value / max, 1);
   const offset = circumference - (ratio * circumference);
   fillEl.style.strokeDasharray = circumference;
@@ -310,35 +239,45 @@ function setGauge(fillEl, value, max) {
 }
 
 function updateGauges(v, c, p) {
-  // Update gauge fills
   setGauge(document.getElementById('voltageFill'), v, CONFIG.voltageMax);
   setGauge(document.getElementById('currentFill'), c, CONFIG.currentMax);
   setGauge(document.getElementById('powerFill'), p, CONFIG.powerMax);
-
-  // Update values
   document.getElementById('voltageValue').textContent = v.toFixed(1);
   document.getElementById('currentValue').textContent = c.toFixed(2);
   document.getElementById('powerValue').textContent = p.toFixed(1);
 }
 
-// ===== SIMULATED DATA GENERATOR =====
-// TODO: Replace this function with real ESP32 data via WebSocket/HTTP
-function generateSimData() {
-  const baseV = 228 + Math.sin(Date.now() / 10000) * 5;
-  const v = baseV + (Math.random() - 0.5) * 4;
 
-  const baseC = 3.5 + Math.sin(Date.now() / 15000) * 1.5;
-  const c = Math.max(0.1, baseC + (Math.random() - 0.5) * 0.8);
-
-  const p = v * c * (0.85 + Math.random() * 0.1);
-
-  return { v: +v.toFixed(2), c: +c.toFixed(3), p: +p.toFixed(1) };
-}
-
-// ===== MAIN UPDATE LOOP =====
-function updateDashboard() {
-  const { v, c, p } = generateSimData();
+// ══════════════════════════════════════════════════════════════
+// PUBLIC API — Call this function to feed real ESP32 data
+// ══════════════════════════════════════════════════════════════
+/**
+ * Feed a new reading from ESP32 into the dashboard.
+ * Call this from your WebSocket/HTTP/Serial bridge integration.
+ *
+ * @param {number} v - Voltage (Vrms) in Volts
+ * @param {number} c - Current in Amps
+ * @param {number} p - Power in Watts
+ *
+ * Example usage:
+ *   updateFromESP32(228.5, 3.42, 781.5);
+ *
+ * Or from a WebSocket:
+ *   ws.onmessage = (e) => {
+ *     const d = JSON.parse(e.data);
+ *     updateFromESP32(d.voltage, d.current, d.power);
+ *   };
+ */
+function updateFromESP32(v, c, p) {
   const timeStr = new Date().toLocaleTimeString('en-US', { hour12: false });
+
+  // Mark as connected
+  if (!state.connected) {
+    state.connected = true;
+    document.getElementById('connectionStatus').querySelector('.status-dot').classList.remove('offline');
+    document.getElementById('connectionStatus').querySelector('.status-text').textContent = 'ESP32 Connected';
+    showToast('ESP32 data stream active!', 'success');
+  }
 
   // Push data
   state.voltage.push(v);
@@ -346,7 +285,6 @@ function updateDashboard() {
   state.power.push(p);
   state.labels.push(timeStr);
 
-  // Trim to max
   if (state.voltage.length > CONFIG.maxDataPoints) {
     state.voltage.shift();
     state.current.shift();
@@ -357,12 +295,15 @@ function updateDashboard() {
   // Update gauges
   updateGauges(v, c, p);
 
-  // Energy accumulation (kWh) = P(W) * t(h)
-  const energyIncrement = p / 1000 / 3600; // per second
+  // Energy accumulation (kWh)
+  const nowMs = Date.now();
+  const dtHours = (nowMs - state.lastUpdateTime) / 3600000;
+  const energyIncrement = (p / 1000) * dtHours;
   state.energy += energyIncrement;
   state.energyToday += energyIncrement;
   state.energyWeek += energyIncrement;
   state.energyMonth += energyIncrement;
+  state.lastUpdateTime = nowMs;
 
   document.getElementById('energyValue').textContent = state.energy.toFixed(3);
   document.getElementById('energyCost').textContent = CONFIG.currency + (state.energy * CONFIG.costPerUnit).toFixed(2);
@@ -397,15 +338,9 @@ function updateDashboard() {
   document.getElementById('powerAvg').textContent = (pArr.reduce((a, b) => a + b, 0) / pArr.length).toFixed(0);
 
   // Peak tracking
-  if (v > state.peakVoltage.value) {
-    state.peakVoltage = { value: v, time: timeStr };
-  }
-  if (c > state.peakCurrent.value) {
-    state.peakCurrent = { value: c, time: timeStr };
-  }
-  if (p > state.peakPower.value) {
-    state.peakPower = { value: p, time: timeStr };
-  }
+  if (v > state.peakVoltage.value) { state.peakVoltage = { value: v, time: timeStr }; }
+  if (c > state.peakCurrent.value) { state.peakCurrent = { value: c, time: timeStr }; }
+  if (p > state.peakPower.value) { state.peakPower = { value: p, time: timeStr }; }
 
   document.getElementById('powerPeak').textContent = state.peakPower.value.toFixed(0);
   document.getElementById('peakVoltage').textContent = state.peakVoltage.value.toFixed(1) + ' V';
@@ -416,7 +351,7 @@ function updateDashboard() {
   document.getElementById('peakPowerTime').textContent = state.peakPower.time;
 
   // Power Factor
-  const pf = (p / (v * c)).toFixed(3);
+  const pf = (v * c) > 0 ? (p / (v * c)).toFixed(3) : '0.000';
   document.getElementById('powerFactor').textContent = pf;
 
   // Load status
@@ -433,7 +368,7 @@ function updateDashboard() {
     loadText.textContent = 'Normal Load';
   }
 
-  // Update Charts
+  // Update real-time Charts
   voltageChart.data.labels = [...state.labels];
   voltageChart.data.datasets[0].data = [...state.voltage];
   voltageChart.update('none');
@@ -445,6 +380,10 @@ function updateDashboard() {
   powerChart.data.labels = [...state.labels];
   powerChart.data.datasets[0].data = [...state.power];
   powerChart.update('none');
+
+  // Update analytics scatter
+  voltageStabilityChart.data.datasets[0].data = state.voltage.map((val, idx) => ({ x: idx, y: val }));
+  voltageStabilityChart.update('none');
 
   // Log entry
   const statusLabel = p > CONFIG.powerMaxThreshold ? 'danger' : p > CONFIG.powerMaxThreshold * 0.7 ? 'warning' : 'normal';
@@ -459,6 +398,7 @@ function updateDashboard() {
   const uptimeM = Math.floor((uptimeMs % 3600000) / 60000);
   document.getElementById('uptimeValue').textContent = `${uptimeH}h ${uptimeM}m`;
 }
+
 
 // ===== LOG TABLE =====
 function updateLogTable() {
@@ -485,16 +425,10 @@ document.querySelectorAll('.nav-item').forEach(item => {
   item.addEventListener('click', (e) => {
     e.preventDefault();
     const section = item.dataset.section;
-
-    // Update active nav
     document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
     item.classList.add('active');
-
-    // Switch section
     document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
     document.getElementById('section-' + section).classList.add('active');
-
-    // Close mobile sidebar
     document.getElementById('sidebar').classList.remove('open');
   });
 });
@@ -506,6 +440,11 @@ document.getElementById('menuToggle').addEventListener('click', () => {
 
 // ===== REPORT DOWNLOAD =====
 function downloadReport(type) {
+  if (state.logEntries.length === 0) {
+    showToast('No data available yet. Connect ESP32 first.', 'warning');
+    return;
+  }
+
   const headers = ['Timestamp', 'Voltage (V)', 'Current (A)', 'Power (W)', 'Energy (kWh)', 'Status'];
   let csvContent = headers.join(',') + '\n';
 
@@ -513,7 +452,6 @@ function downloadReport(type) {
     csvContent += `${e.time},${e.v},${e.c},${e.p},${e.energy},${e.statusText}\n`;
   });
 
-  // Add summary
   csvContent += '\n--- SUMMARY ---\n';
   csvContent += `Peak Voltage,${state.peakVoltage.value} V,at ${state.peakVoltage.time}\n`;
   csvContent += `Peak Current,${state.peakCurrent.value} A,at ${state.peakCurrent.time}\n`;
@@ -542,7 +480,6 @@ function saveSettings() {
   CONFIG.voltageLowThreshold = parseFloat(document.getElementById('voltageLow').value) || 200;
   CONFIG.currentMaxThreshold = parseFloat(document.getElementById('currentMax').value) || 15;
   CONFIG.powerMaxThreshold = parseFloat(document.getElementById('powerMax').value) || 3000;
-
   showToast('Settings saved successfully!', 'success');
 }
 
@@ -551,16 +488,9 @@ function showToast(message, type = 'success') {
   const container = document.getElementById('toastContainer');
   const toast = document.createElement('div');
   toast.className = `toast ${type}`;
-
-  const icons = {
-    success: '✅',
-    warning: '⚠️',
-    error: '❌',
-  };
-
+  const icons = { success: '✅', warning: '⚠️', error: '❌' };
   toast.innerHTML = `<span>${icons[type] || '💬'}</span><span>${message}</span>`;
   container.appendChild(toast);
-
   setTimeout(() => {
     toast.classList.add('fade-out');
     setTimeout(() => toast.remove(), 300);
@@ -572,15 +502,61 @@ function init() {
   updateClock();
   setInterval(updateClock, 1000);
 
-  // Start real-time updates
-  updateDashboard();
-  setInterval(updateDashboard, CONFIG.sampleInterval);
+  // Show waiting state
+  document.getElementById('connectionStatus').querySelector('.status-dot').classList.add('offline');
+  document.getElementById('connectionStatus').querySelector('.status-text').textContent = 'Waiting for ESP32...';
 
-  // Initial startup toast
-  setTimeout(() => {
-    showToast('Dashboard initialized — Simulated data active', 'success');
-  }, 800);
+  showToast('Waiting for ESP32 data — connect your device', 'warning');
 }
 
-// Start when DOM is loaded
 document.addEventListener('DOMContentLoaded', init);
+
+
+// ══════════════════════════════════════════════════════════════
+// INTEGRATION EXAMPLES (uncomment the one you need)
+// ══════════════════════════════════════════════════════════════
+
+/*
+// ── Option 1: WebSocket ──
+// If your ESP32 serves a WebSocket (e.g., AsyncWebServer):
+const ws = new WebSocket('ws://YOUR_ESP32_IP/ws');
+ws.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+  updateFromESP32(data.voltage, data.current, data.power);
+};
+
+// ── Option 2: HTTP Polling ──
+// If your ESP32 has an HTTP endpoint returning JSON:
+setInterval(async () => {
+  try {
+    const res = await fetch('http://YOUR_ESP32_IP/data');
+    const data = await res.json();
+    updateFromESP32(data.voltage, data.current, data.power);
+  } catch (e) {
+    console.error('ESP32 fetch error:', e);
+  }
+}, 1000);
+
+// ── Option 3: Serial over Web Serial API ──
+// For direct USB serial from browser (Chrome only):
+async function connectSerial() {
+  const port = await navigator.serial.requestPort();
+  await port.open({ baudRate: 115200 });
+  const reader = port.readable.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value);
+    const lines = buffer.split('\n');
+    buffer = lines.pop();
+    for (const line of lines) {
+      const match = line.match(/Vrms:\s([\d.]+).*Current:\s([\d.]+).*Power:\s([\d.]+)/);
+      if (match) {
+        updateFromESP32(parseFloat(match[1]), parseFloat(match[2]), parseFloat(match[3]));
+      }
+    }
+  }
+}
+*/
