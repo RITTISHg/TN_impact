@@ -3,6 +3,20 @@
    Awaits real ESP32 data via WebSocket / HTTP / Serial bridge
    Deployed on Vercel · Processed on AMD Ryzen™
    ============================================================ */
+'use strict';
+
+// ===== SECURITY: HTML sanitizer to prevent XSS =====
+function escapeHTML(str) {
+    const div = document.createElement('div');
+    div.appendChild(document.createTextNode(String(str)));
+    return div.innerHTML;
+}
+
+function sanitizeNumber(val, fallback = 0, min = -Infinity, max = Infinity) {
+    const n = parseFloat(val);
+    if (isNaN(n) || !isFinite(n)) return fallback;
+    return Math.max(min, Math.min(max, n));
+}
 
 // ===== CONFIGURATION =====
 const CONFIG = {
@@ -289,10 +303,12 @@ function updateONNXPanel() {
     breakdown.innerHTML = '';
     for (const [name, ms] of Object.entries(onnxState.modelLatencies)) {
         const avg = ms.latencies.reduce((a, b) => a + b, 0) / ms.latencies.length;
-        const shortName = name.replace('anomaly_detector', 'AnomalyDet').replace('fault_', 'Fault-');
+        const shortName = escapeHTML(name.replace('anomaly_detector', 'AnomalyDet').replace('fault_', 'Fault-'));
         const row = document.createElement('div');
         row.className = 'onnx-model-row';
-        row.innerHTML = `<span class="model-name">${shortName}</span><span class="model-stats">${avg.toFixed(2)}ms avg · ${ms.count} calls</span>`;
+        const nameSpan = document.createElement('span'); nameSpan.className = 'model-name'; nameSpan.textContent = shortName;
+        const statsSpan = document.createElement('span'); statsSpan.className = 'model-stats'; statsSpan.textContent = `${avg.toFixed(2)}ms avg · ${ms.count} calls`;
+        row.appendChild(nameSpan); row.appendChild(statsSpan);
         breakdown.appendChild(row);
     }
 
@@ -309,16 +325,31 @@ function updateAIPanel() {
     document.getElementById('healthLabel').textContent = `System Health: ${aiState.healthLabel}`;
 
     const alertsEl = document.getElementById('aiAlerts');
-    let alertHTML = '';
-    if (aiState.faultId !== 0) alertHTML += `<div class="ai-alert-item fault">FAULT: ${aiState.faultName} (${(aiState.faultConfidence * 100).toFixed(0)}%)</div>`;
-    if (aiState.isAnomaly) alertHTML += `<div class="ai-alert-item anomaly">ANOMALY (score=${aiState.anomalyScore.toFixed(2)})</div>`;
-    if (!aiState.isAnomaly && aiState.faultId === 0) alertHTML += '<div class="ai-alert-item normal">All systems operating normally</div>';
-    alertsEl.innerHTML = alertHTML;
+    alertsEl.innerHTML = '';
+    if (aiState.faultId !== 0) {
+        const d = document.createElement('div'); d.className = 'ai-alert-item fault';
+        d.textContent = `FAULT: ${aiState.faultName} (${(aiState.faultConfidence * 100).toFixed(0)}%)`;
+        alertsEl.appendChild(d);
+    }
+    if (aiState.isAnomaly) {
+        const d = document.createElement('div'); d.className = 'ai-alert-item anomaly';
+        d.textContent = `ANOMALY (score=${aiState.anomalyScore.toFixed(2)})`;
+        alertsEl.appendChild(d);
+    }
+    if (!aiState.isAnomaly && aiState.faultId === 0) {
+        const d = document.createElement('div'); d.className = 'ai-alert-item normal';
+        d.textContent = 'All systems operating normally';
+        alertsEl.appendChild(d);
+    }
 
     const recEl = document.getElementById('aiRecommendations');
-    recEl.innerHTML = aiState.recommendations.map(r =>
-        `<div class="ai-rec-item"><div class="rec-title">• ${r.title}</div><div class="rec-action">${r.action}</div></div>`
-    ).join('');
+    recEl.innerHTML = '';
+    aiState.recommendations.forEach(r => {
+        const item = document.createElement('div'); item.className = 'ai-rec-item';
+        const title = document.createElement('div'); title.className = 'rec-title'; title.textContent = `• ${r.title}`;
+        const action = document.createElement('div'); action.className = 'rec-action'; action.textContent = r.action;
+        item.appendChild(title); item.appendChild(action); recEl.appendChild(item);
+    });
 }
 
 
@@ -326,6 +357,10 @@ function updateAIPanel() {
 // MAIN UPDATE FUNCTION
 // ══════════════════════════════════════════════════════════════
 function updateFromESP32(v, c, p) {
+    // Input validation — reject non-numeric or wildly out-of-range values
+    v = sanitizeNumber(v, 0, 0, 500);
+    c = sanitizeNumber(c, 0, 0, 100);
+    p = sanitizeNumber(p, 0, 0, 50000);
     const timeStr = new Date().toLocaleTimeString('en-US', { hour12: false });
     state.sampleCount++;
 
@@ -426,9 +461,19 @@ function updateFromESP32(v, c, p) {
 // ══════════════════════════════════════════════════════════════
 function updateLogTable() {
     const tbody = document.getElementById('logTableBody');
-    tbody.innerHTML = state.logEntries.map(e => `
-    <tr><td>${e.time}</td><td>${e.v.toFixed(1)}</td><td>${e.c.toFixed(3)}</td><td>${e.p.toFixed(1)}</td><td>${e.energy}</td><td><span class="status-badge ${e.status}">${e.statusText}</span></td></tr>
-  `).join('');
+    tbody.innerHTML = '';
+    state.logEntries.forEach(e => {
+        const tr = document.createElement('tr');
+        const cells = [e.time, e.v.toFixed(1), e.c.toFixed(3), e.p.toFixed(1), e.energy];
+        cells.forEach(val => { const td = document.createElement('td'); td.textContent = val; tr.appendChild(td); });
+        const statusTd = document.createElement('td');
+        const badge = document.createElement('span');
+        const safeStatus = ['normal', 'warning', 'danger'].includes(e.status) ? e.status : 'normal';
+        badge.className = `status-badge ${safeStatus}`;
+        badge.textContent = escapeHTML(e.statusText);
+        statusTd.appendChild(badge); tr.appendChild(statusTd);
+        tbody.appendChild(tr);
+    });
 }
 
 function updateClock() { document.getElementById('headerTime').textContent = new Date().toLocaleTimeString('en-US', { hour12: false }); }
@@ -447,6 +492,9 @@ document.querySelectorAll('.nav-item').forEach(item => {
 document.getElementById('menuToggle').addEventListener('click', () => { document.getElementById('sidebar').classList.toggle('open'); });
 
 function downloadReport(type) {
+    // Sanitize report type to prevent path traversal
+    const allowedTypes = ['daily', 'monthly', 'full'];
+    if (!allowedTypes.includes(type)) { showToast('Invalid report type.', 'error'); return; }
     if (state.logEntries.length === 0) { showToast('No data available yet.', 'warning'); return; }
     const headers = ['Timestamp', 'Voltage (V)', 'Current (A)', 'Power (W)', 'Energy (kWh)', 'Status'];
     let csv = headers.join(',') + '\n';
@@ -457,26 +505,33 @@ function downloadReport(type) {
     csv += `Peak Power,${state.peakPower.value} W,at ${state.peakPower.time}\n`;
     csv += `Total Energy,${state.energy.toFixed(4)} kWh\nEstimated Cost,${CONFIG.currency}${(state.energy * CONFIG.costPerUnit).toFixed(2)}\n`;
     const blob = new Blob([csv], { type: 'text/csv' }); const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = `power_report_${type}_${new Date().toISOString().split('T')[0]}.csv`;
+    const safeDate = new Date().toISOString().split('T')[0].replace(/[^0-9-]/g, '');
+    const a = document.createElement('a'); a.href = url; a.download = `power_report_${type}_${safeDate}.csv`;
     document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
     showToast(`${type.charAt(0).toUpperCase() + type.slice(1)} report downloaded!`, 'success');
 }
 
 function saveSettings() {
-    CONFIG.costPerUnit = parseFloat(document.getElementById('costPerUnit').value) || 6.50;
-    CONFIG.currency = document.getElementById('currency').value || '₹';
-    CONFIG.voltageHighThreshold = parseFloat(document.getElementById('voltageHigh').value) || 250;
-    CONFIG.voltageLowThreshold = parseFloat(document.getElementById('voltageLow').value) || 200;
-    CONFIG.currentMaxThreshold = parseFloat(document.getElementById('currentMax').value) || 15;
-    CONFIG.powerMaxThreshold = parseFloat(document.getElementById('powerMax').value) || 3000;
+    // Validate and clamp all user inputs to safe ranges
+    CONFIG.costPerUnit = sanitizeNumber(document.getElementById('costPerUnit').value, 6.50, 0.01, 100);
+    const rawCurrency = document.getElementById('currency').value || '₹';
+    CONFIG.currency = escapeHTML(rawCurrency.substring(0, 3)); // Max 3 chars, sanitized
+    CONFIG.voltageHighThreshold = sanitizeNumber(document.getElementById('voltageHigh').value, 250, 100, 500);
+    CONFIG.voltageLowThreshold = sanitizeNumber(document.getElementById('voltageLow').value, 200, 50, 400);
+    CONFIG.currentMaxThreshold = sanitizeNumber(document.getElementById('currentMax').value, 15, 1, 100);
+    CONFIG.powerMaxThreshold = sanitizeNumber(document.getElementById('powerMax').value, 3000, 100, 50000);
     showToast('Settings saved successfully!', 'success');
 }
 
 function showToast(message, type = 'success') {
+    const allowedTypes = ['success', 'warning', 'error'];
+    if (!allowedTypes.includes(type)) type = 'success';
     const container = document.getElementById('toastContainer');
     const toast = document.createElement('div'); toast.className = `toast ${type}`;
     const icons = { success: '✅', warning: '⚠️', error: '❌' };
-    toast.innerHTML = `<span>${icons[type] || '💬'}</span><span>${message}</span>`;
+    const iconSpan = document.createElement('span'); iconSpan.textContent = icons[type] || '💬';
+    const msgSpan = document.createElement('span'); msgSpan.textContent = message;
+    toast.appendChild(iconSpan); toast.appendChild(msgSpan);
     container.appendChild(toast);
     setTimeout(() => { toast.classList.add('fade-out'); setTimeout(() => toast.remove(), 300); }, 3000);
 }

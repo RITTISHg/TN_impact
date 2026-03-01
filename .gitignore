@@ -10,16 +10,19 @@ build/
 # Virtual environments
 venv/
 .env/
+env/
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+*.sublime-*
 
 # OS files
 Thumbs.db
 .DS_Store
+desktop.ini
 
 # ML model binaries (too large for git)
 ml_models/saved_models/*.joblib
@@ -29,7 +32,22 @@ ml_models/saved_models/onnx/*.onnx
 node_modules/
 .vercel/
 
-# Misc
-*.log
+# Secrets / credentials (NEVER commit these)
 .env
 .env.local
+.env.production
+*.pem
+*.key
+*.crt
+credentials.json
+secrets.json
+config.secret.*
+
+# Logs
+*.log
+npm-debug.log*
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
