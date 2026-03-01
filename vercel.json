@@ -1,0 +1,5 @@
+{
+    "version": 2,
+    "name": "esp32-power-dashboard",
+    "outputDirectory": "web-dashboard/public"
+}
