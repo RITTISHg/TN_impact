@@ -5,13 +5,15 @@
 ║     ML Inference via ONNX Runtime on AMD Ryzen™ Processor    ║
 ╚══════════════════════════════════════════════════════════════╝
 """
+from __future__ import annotations
+from typing import Any, Dict, List, Optional
 
-import serial
-import matplotlib
+import serial  # type: ignore[import-untyped]
+import matplotlib  # type: ignore[import-untyped]
 matplotlib.use('TkAgg')
-import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
-import numpy as np
+import matplotlib.pyplot as plt  # type: ignore[import-untyped]
+import matplotlib.gridspec as gridspec  # type: ignore[import-untyped]
+import numpy as np  # type: ignore[import-untyped]
 from collections import deque
 from datetime import datetime
 import re
@@ -21,16 +23,21 @@ import os
 # ══════════════════════════════════════════════════════════════
 # AI INTELLIGENCE IMPORTS
 # ══════════════════════════════════════════════════════════════
-from ml_models.model_manager import ModelManager
-from ml_models.insights_engine import InsightsEngine
-from ml_models.onnx_converter import ONNXModelConverter, ONNXPerformanceMonitor
-from ml_models.feature_engineer import FeatureEngineer
-from ml_models.config import ANOMALY_WINDOW_SIZE, FAULT_CLASSES
+from ml_models.model_manager import ModelManager  # type: ignore[import-untyped]
+from ml_models.insights_engine import InsightsEngine  # type: ignore[import-untyped]
+from ml_models.onnx_converter import ONNXModelConverter, ONNXPerformanceMonitor  # type: ignore[import-untyped]
+from ml_models.feature_engineer import FeatureEngineer  # type: ignore[import-untyped]
+from ml_models.config import ANOMALY_WINDOW_SIZE, FAULT_CLASSES  # type: ignore[import-untyped]
+
+# ══════════════════════════════════════════════════════════════
+# FIREBASE CLOUD UPLOADER
+# ══════════════════════════════════════════════════════════════
+from firebase_uploader import get_uploader  # type: ignore[import-untyped]
 
 # ══════════════════════════════════════════════════════════════
 # CONFIGURATION
 # ══════════════════════════════════════════════════════════════
-PORT = "COM5"
+PORT = "COM3"
 BAUD = 115200
 TIME_WINDOW = 80
 COST_PER_KWH = 6.50
@@ -43,10 +50,13 @@ CURRENT_MAX = 15
 POWER_MAX = 3000
 VOLTAGE_NOMINAL = 230
 
+# Firebase upload intervals (in samples)
+ONNX_UPLOAD_EVERY_N: int = 30   # push ONNX perf snapshot every 30 readings
+
 # ══════════════════════════════════════════════════════════════
 # DARK THEME COLORS
 # ══════════════════════════════════════════════════════════════
-COLORS = {
+COLORS: Dict[str, str] = {
     'bg_primary':    '#0a0e1a',
     'bg_card':       '#111827',
     'bg_card_alt':   '#151d2e',
@@ -75,163 +85,32 @@ COLORS = {
 # ══════════════════════════════════════════════════════════════
 # DATA STORAGE
 # ══════════════════════════════════════════════════════════════
-voltage_data = deque(maxlen=TIME_WINDOW)
-current_data = deque(maxlen=TIME_WINDOW)
-power_data = deque(maxlen=TIME_WINDOW)
+voltage_data: deque[float] = deque(maxlen=TIME_WINDOW)
+current_data: deque[float] = deque(maxlen=TIME_WINDOW)
+power_data: deque[float] = deque(maxlen=TIME_WINDOW)
 
-# Statistics tracking
-stats = {
-    'voltage_min': float('inf'), 'voltage_max': 0, 'voltage_sum': 0,
-    'current_min': float('inf'), 'current_max': 0, 'current_sum': 0,
-    'power_min': float('inf'), 'power_max': 0, 'power_sum': 0,
-    'peak_voltage_time': '', 'peak_current_time': '', 'peak_power_time': '',
-    'sample_count': 0,
+# Statistics tracking — separate typed dicts to avoid union-type confusion
+stats_float: Dict[str, float] = {
+    'voltage_min': float('inf'), 'voltage_max': 0.0, 'voltage_sum': 0.0,
+    'current_min': float('inf'), 'current_max': 0.0, 'current_sum': 0.0,
+    'power_min': float('inf'), 'power_max': 0.0, 'power_sum': 0.0,
     'energy_kwh': 0.0,
-    'start_time': datetime.now(),
     'last_update': time.time(),
 }
+stats_str: Dict[str, str] = {
+    'peak_voltage_time': '', 'peak_current_time': '', 'peak_power_time': '',
+}
+stats_int: Dict[str, int] = {
+    'sample_count': 0,
+}
+stats_start_time: datetime = datetime.now()
 
 # ══════════════════════════════════════════════════════════════
-# REALISTIC SENSOR DATA ENGINE
+# REALISTIC SENSOR DATA ENGINE (REMOVED)
 # ══════════════════════════════════════════════════════════════
-class SensorDataEngine:
-    """
-    High-fidelity AC power line data engine with realistic
-    time-of-day load profiles, transient events, and noise
-    characteristics matching real ESP32 PZEM-004T readings.
-    """
+# The simulator has been completely removed to ensure only real hardware
+# sensor data from the ESP32 is used.
 
-    def __init__(self):
-        self._t = 0
-        self._cycle = 0
-        self._base_load = 0.45
-        self._start_hour = datetime.now().hour + datetime.now().minute / 60.0
-        self._transient_timer = 0
-        self._transient_type = None
-        self._appliance_state = {
-            'ac': False, 'heater': False, 'motor': False,
-            'fridge_compressor': True, 'lighting': True,
-        }
-        self._fridge_cycle = 0
-        self._last_switch = 0
-        self._rng = np.random.default_rng(int(time.time()) % 10000)
-
-    def _get_hour(self):
-        """Current simulated hour based on real wall clock."""
-        return (self._start_hour + self._t / 3600.0) % 24
-
-    def _daily_load_profile(self, hour):
-        """Realistic residential daily load curve."""
-        base = 0.35
-        morning = 0.18 * max(0, np.sin(np.pi * (hour - 6) / 5)) if 5 <= hour <= 11 else 0
-        afternoon = 0.08 * max(0, np.sin(np.pi * (hour - 12) / 4)) if 10 <= hour <= 16 else 0
-        evening = 0.30 * max(0, np.sin(np.pi * (hour - 17) / 5)) if 15 <= hour <= 22 else 0
-        night = -0.15 if hour < 5 or hour > 23 else 0
-        return max(0.15, min(1.0, base + morning + afternoon + evening + night))
-
-    def _grid_voltage(self, hour):
-        """Grid voltage with realistic sag/swell patterns."""
-        base = VOLTAGE_NOMINAL
-        # Grid tends to sag during peak evening hours
-        if 18 <= hour <= 21:
-            base -= self._rng.uniform(1.5, 4.0)
-        elif 2 <= hour <= 5:
-            base += self._rng.uniform(0.5, 2.5)
-
-        # Micro-fluctuations (50Hz harmonics residual)
-        flicker = 0.3 * np.sin(2 * np.pi * self._t * 0.1)
-        # Measurement noise (ESP32 ADC + PZEM quantization)
-        noise = self._rng.normal(0, 0.8)
-
-        return base + flicker + noise
-
-    def _update_appliances(self, hour):
-        """Cycle appliance states for realistic load variation."""
-        # Fridge compressor cycles every ~20-30 minutes
-        self._fridge_cycle += 1
-        if self._fridge_cycle > self._rng.integers(1200, 1800):
-            self._appliance_state['fridge_compressor'] = not self._appliance_state['fridge_compressor']
-            self._fridge_cycle = 0
-
-        # Random appliance switching (every 30-120 seconds)
-        self._last_switch += 1
-        if self._last_switch > self._rng.integers(300, 1200):
-            key = self._rng.choice(['ac', 'heater', 'motor', 'lighting'])
-            # Time-of-day logic
-            if key == 'ac' and 10 <= hour <= 22:
-                self._appliance_state['ac'] = self._rng.random() > 0.4
-            elif key == 'heater' and (hour < 6 or hour > 20):
-                self._appliance_state['heater'] = self._rng.random() > 0.6
-            elif key == 'motor':
-                self._appliance_state['motor'] = self._rng.random() > 0.7
-            elif key == 'lighting':
-                if 6 <= hour <= 18:
-                    self._appliance_state['lighting'] = self._rng.random() > 0.3
-                else:
-                    self._appliance_state['lighting'] = True
-            self._last_switch = 0
-
-    def _calculate_load_current(self, hour):
-        """Calculate total load current from appliance states."""
-        load = self._daily_load_profile(hour) * CURRENT_MAX * 0.4
-
-        if self._appliance_state['fridge_compressor']:
-            load += self._rng.uniform(0.8, 1.5)
-        if self._appliance_state['ac']:
-            load += self._rng.uniform(3.0, 5.5)
-        if self._appliance_state['heater']:
-            load += self._rng.uniform(4.0, 7.0)
-        if self._appliance_state['motor']:
-            load += self._rng.uniform(1.5, 3.0)
-        if self._appliance_state['lighting']:
-            load += self._rng.uniform(0.3, 0.8)
-
-        # Inrush current transients
-        if self._transient_timer > 0:
-            load *= 1.0 + 0.3 * np.exp(-self._transient_timer / 5)
-            self._transient_timer -= 1
-
-        # Current measurement noise
-        load += self._rng.normal(0, 0.05)
-        return max(0.05, load)
-
-    def _inject_transient(self):
-        """Occasionally inject realistic transient events."""
-        if self._rng.random() < 0.003:  # ~0.3% chance per sample
-            self._transient_timer = self._rng.integers(3, 15)
-            self._transient_type = self._rng.choice([
-                'motor_start', 'compressor_kick', 'load_switch'
-            ])
-
-    def readline(self):
-        """Generate next sensor reading in ESP32 serial format."""
-        time.sleep(0.1)  # Match real PZEM-004T update rate (~10 Hz)
-        self._t += 1
-        hour = self._get_hour()
-
-        self._update_appliances(hour)
-        self._inject_transient()
-
-        v = self._grid_voltage(hour)
-        i = self._calculate_load_current(hour)
-
-        # Realistic power factor (0.85 ~ 0.95 for mixed residential load)
-        pf_base = 0.92
-        if self._appliance_state['motor']:
-            pf_base -= 0.08  # Motors reduce PF
-        if self._appliance_state['ac']:
-            pf_base -= 0.03
-        pf = max(0.70, min(0.99, pf_base + self._rng.normal(0, 0.01)))
-
-        p = v * i * pf
-
-        return f"Vrms: {v:.2f} Current: {i:.3f} Power: {p:.2f}".encode()
-
-    def close(self):
-        pass
-
-    def is_open(self):
-        return True
 
 
 # ══════════════════════════════════════════════════════════════
@@ -242,6 +121,8 @@ print("  ⚡ AMD Power Monitor — ONNX ML Intelligence Suite")
 print("═" * 60)
 
 print("  Initializing ML Framework...")
+ml_manager: Optional[ModelManager] = None
+ai_engine: Optional[InsightsEngine] = None
 try:
     ml_manager = ModelManager()
     ml_manager.load_all_models()
@@ -295,18 +176,26 @@ rt_info = onnx_converter.get_runtime_info()
 print(f"  ONNX Runtime: v{rt_info['runtime_version']}")
 print(f"  Providers: {rt_info['providers']}")
 
+# ══════════════════════════════════════════════════════════════
+# FIREBASE CLOUD UPLOADER — START BACKGROUND THREAD
+# ══════════════════════════════════════════════════════════════
+print("\n  Initializing Firebase Cloud Uploader...")
+fb_uploader = get_uploader()
+if fb_uploader.is_ready:
+    fb_uploader.start()
+else:
+    print("  [Firebase] Running without cloud sync (credentials not configured).")
+
 # ONNX inference buffers
 onnx_voltage_buf = deque(maxlen=ANOMALY_WINDOW_SIZE)
 onnx_current_buf = deque(maxlen=ANOMALY_WINDOW_SIZE)
 onnx_power_buf = deque(maxlen=ANOMALY_WINDOW_SIZE)
 
-# AI state
-ai_state = {
-    'anomaly': {'is_anomaly': False, 'score': 0.0},
-    'fault': {'fault_id': 0, 'confidence': 1.0},
-    'health': {'overall_score': 100.0, 'color': COLORS['success'], 'label': 'Healthy'},
-    'insights': []
-}
+# AI state — typed dicts for type-checker clarity
+ai_anomaly: Dict[str, Any] = {'is_anomaly': False, 'score': 0.0}
+ai_fault: Dict[str, Any] = {'fault_id': 0, 'confidence': 1.0}
+ai_health: Dict[str, Any] = {'overall_score': 100.0, 'color': COLORS['success'], 'label': 'Healthy'}
+ai_insights: List[Dict[str, Any]] = []
 
 # ══════════════════════════════════════════════════════════════
 # SENSOR CONNECTION
@@ -316,47 +205,54 @@ try:
     ser = serial.Serial(PORT, BAUD, timeout=1)
     print(f"  ✅ ESP32 connected successfully!\n")
 except Exception as e:
-    print(f"  Initializing internal sensor pipeline...")
-    ser = SensorDataEngine()
-    print(f"  ✅ Sensor data pipeline active.\n")
+    print(f"  [!] Failed to connect to ESP32 on {PORT}: {e}")
+    print("  Exiting... Please check your hardware connections and COM port.")
+    import sys
+    sys.exit(1)
 
 
 def extract_values(line):
-    """Parse sensor data: Vrms, Current, Power"""
-    match = re.search(r"Vrms:\s([\d.]+).*Current:\s([\d.]+).*Power:\s([\d.]+)", line)
-    if match:
-        return float(match.group(1)), float(match.group(2)), float(match.group(3))
+    """Parse sensor data: voltage,current"""
+    try:
+        parts = line.split(',')
+        if len(parts) >= 2:
+            v = float(parts[0])
+            i = float(parts[1])
+            p = v * i * 0.92  # Estimate real power with assumed 0.92 PF
+            return v, i, p
+    except ValueError:
+        pass
     return None
 
 
-def update_stats(v, i, p):
+def update_stats(v: float, i: float, p: float) -> None:
     """Update running statistics"""
     now_str = datetime.now().strftime('%H:%M:%S')
-    stats['sample_count'] += 1
+    stats_int['sample_count'] += 1
 
-    if v < stats['voltage_min']: stats['voltage_min'] = v
-    if v > stats['voltage_max']:
-        stats['voltage_max'] = v
-        stats['peak_voltage_time'] = now_str
+    if v < stats_float['voltage_min']: stats_float['voltage_min'] = v
+    if v > stats_float['voltage_max']:
+        stats_float['voltage_max'] = v
+        stats_str['peak_voltage_time'] = now_str
 
-    if i < stats['current_min']: stats['current_min'] = i
-    if i > stats['current_max']:
-        stats['current_max'] = i
-        stats['peak_current_time'] = now_str
+    if i < stats_float['current_min']: stats_float['current_min'] = i
+    if i > stats_float['current_max']:
+        stats_float['current_max'] = i
+        stats_str['peak_current_time'] = now_str
 
-    if p < stats['power_min']: stats['power_min'] = p
-    if p > stats['power_max']:
-        stats['power_max'] = p
-        stats['peak_power_time'] = now_str
+    if p < stats_float['power_min']: stats_float['power_min'] = p
+    if p > stats_float['power_max']:
+        stats_float['power_max'] = p
+        stats_str['peak_power_time'] = now_str
 
-    stats['voltage_sum'] += v
-    stats['current_sum'] += i
-    stats['power_sum'] += p
+    stats_float['voltage_sum'] += v
+    stats_float['current_sum'] += i
+    stats_float['power_sum'] += p
 
     now = time.time()
-    dt_hours = (now - stats['last_update']) / 3600.0
-    stats['energy_kwh'] += (p / 1000.0) * dt_hours
-    stats['last_update'] = now
+    dt_hours = (now - stats_float['last_update']) / 3600.0
+    stats_float['energy_kwh'] += (p / 1000.0) * dt_hours
+    stats_float['last_update'] = now
 
 
 def get_load_status(p):
@@ -440,7 +336,7 @@ def draw_waveform(ax, data, color, title, unit, y_min=None, y_max=None):
 
     ax.annotate(f'{data[-1]:.1f}{unit}',
                 xy=(len(data) - 1, data[-1]),
-                xytext=(len(data) - 1 - 5, data[-1] + (max(data) - min(data)) * 0.15 if len(data) > 1 else data[-1] + 1),
+                xytext=(len(data) - 1 - 5, (data[-1] + (max(data) - min(data)) * 0.15) if len(data) > 1 else (data[-1] + 1)),
                 fontsize=8, fontweight='bold', color=color,
                 fontfamily='monospace',
                 bbox={'boxstyle': 'round,pad=0.25', 'facecolor': COLORS['bg_card_alt'],
@@ -469,7 +365,7 @@ def draw_waveform(ax, data, color, title, unit, y_min=None, y_max=None):
         ax.axhline(y=min(data), color=COLORS['accent_blue'], linewidth=0.6, alpha=0.4, linestyle='--')
 
 
-def draw_stats_panel(ax, v, i, p):
+def draw_stats_panel(ax: Any, v: float, i: float, p: float) -> None:
     """Draw the live statistics panel"""
     ax.clear()
     ax.set_facecolor(COLORS['bg_card'])
@@ -477,7 +373,7 @@ def draw_stats_panel(ax, v, i, p):
     ax.set_xlim(0, 10)
     ax.set_ylim(0, 10)
 
-    n = max(stats['sample_count'], 1)
+    n = max(stats_int['sample_count'], 1)
     LX = 0.6   # Label column X
     VX = 4.8   # Value column X (right-aligned)
     SP = 0.58  # Row spacing
@@ -485,7 +381,7 @@ def draw_stats_panel(ax, v, i, p):
     # ── Header ──
     ax.text(5, 9.5, 'LIVE STATISTICS', fontsize=10, fontweight='bold',
             color=COLORS['text_primary'], ha='center', va='center')
-    ax.text(9.3, 9.5, f'n={stats["sample_count"]}', fontsize=6,
+    ax.text(9.3, 9.5, f'n={stats_int["sample_count"]}', fontsize=6,
             color=COLORS['text_muted'], ha='right', va='center', fontfamily='monospace')
     ax.plot([0.5, 9.5], [9.05, 9.05], color=COLORS['border'], linewidth=0.8, alpha=0.5)
 
@@ -493,9 +389,9 @@ def draw_stats_panel(ax, v, i, p):
     y = 8.4
     ax.text(LX, y, '⚡ VOLTAGE', fontsize=7.5, fontweight='bold', color=COLORS['voltage'])
     y -= SP
-    v_min_s = f'{stats["voltage_min"]:.1f}' if stats['voltage_min'] < float('inf') else '--'
-    v_avg_s = f'{stats["voltage_sum"]/n:.1f}'
-    v_max_s = f'{stats["voltage_max"]:.1f}' if stats['voltage_max'] > 0 else '--'
+    v_min_s = f'{stats_float["voltage_min"]:.1f}' if stats_float['voltage_min'] < float('inf') else '--'
+    v_avg_s = f'{stats_float["voltage_sum"]/n:.1f}'
+    v_max_s = f'{stats_float["voltage_max"]:.1f}' if stats_float['voltage_max'] > 0 else '--'
     for lbl, val in [('Min', v_min_s), ('Avg', v_avg_s), ('Max', v_max_s)]:
         ax.text(LX + 0.3, y, f'{lbl}:', fontsize=7, color=COLORS['text_muted'], fontfamily='monospace')
         ax.text(VX, y, f'{val} V', fontsize=7, color=COLORS['text_secondary'],
@@ -506,9 +402,9 @@ def draw_stats_panel(ax, v, i, p):
     y -= 0.15
     ax.text(LX, y, '⏛ CURRENT', fontsize=7.5, fontweight='bold', color=COLORS['current'])
     y -= SP
-    i_min_s = f'{stats["current_min"]:.3f}' if stats['current_min'] < float('inf') else '--'
-    i_avg_s = f'{stats["current_sum"]/n:.3f}'
-    i_max_s = f'{stats["current_max"]:.3f}' if stats['current_max'] > 0 else '--'
+    i_min_s = f'{stats_float["current_min"]:.3f}' if stats_float['current_min'] < float('inf') else '--'
+    i_avg_s = f'{stats_float["current_sum"]/n:.3f}'
+    i_max_s = f'{stats_float["current_max"]:.3f}' if stats_float['current_max'] > 0 else '--'
     for lbl, val in [('Min', i_min_s), ('Avg', i_avg_s), ('Max', i_max_s)]:
         ax.text(LX + 0.3, y, f'{lbl}:', fontsize=7, color=COLORS['text_muted'], fontfamily='monospace')
         ax.text(VX, y, f'{val} A', fontsize=7, color=COLORS['text_secondary'],
@@ -519,9 +415,9 @@ def draw_stats_panel(ax, v, i, p):
     y -= 0.15
     ax.text(LX, y, '⚡ POWER', fontsize=7.5, fontweight='bold', color=COLORS['power'])
     y -= SP
-    p_min_s = f'{stats["power_min"]:.0f}' if stats['power_min'] < float('inf') else '--'
-    p_avg_s = f'{stats["power_sum"]/n:.0f}'
-    p_max_s = f'{stats["power_max"]:.0f}' if stats['power_max'] > 0 else '--'
+    p_min_s = f'{stats_float["power_min"]:.0f}' if stats_float['power_min'] < float('inf') else '--'
+    p_avg_s = f'{stats_float["power_sum"]/n:.0f}'
+    p_max_s = f'{stats_float["power_max"]:.0f}' if stats_float['power_max'] > 0 else '--'
     for lbl, val, clr in [('Min', p_min_s, COLORS['text_secondary']),
                            ('Avg', p_avg_s, COLORS['text_secondary']),
                            ('Peak', p_max_s, COLORS['danger'])]:
@@ -556,14 +452,14 @@ def draw_energy_panel(ax):
     ax.plot([0.5, 9.5], [9.05, 9.05], color=COLORS['border'], linewidth=0.8, alpha=0.5)
 
     # ── Big energy value ──
-    energy = stats['energy_kwh']
+    energy: float = stats_float['energy_kwh']
     ax.text(5, 7.4, f'{energy:.4f}', fontsize=28, fontweight='bold',
             color=COLORS['energy'], ha='center', va='center', fontfamily='monospace')
     ax.text(5, 6.3, 'kWh', fontsize=11, color=COLORS['text_muted'],
             ha='center', va='center')
 
     # ── Cost ──
-    cost = energy * COST_PER_KWH
+    cost: float = energy * COST_PER_KWH
     ax.text(5, 5.3, f'Cost: {CURRENCY}{cost:.2f}', fontsize=10,
             fontweight='600', color=COLORS['text_secondary'],
             ha='center', va='center', fontfamily='monospace')
@@ -571,7 +467,7 @@ def draw_energy_panel(ax):
     ax.plot([1, 9], [4.7, 4.7], color=COLORS['border'], linewidth=0.5, alpha=0.4)
 
     # ── Uptime + Timestamp ──
-    uptime = datetime.now() - stats['start_time']
+    uptime = datetime.now() - stats_start_time
     hours = int(uptime.total_seconds() // 3600)
     minutes = int((uptime.total_seconds() % 3600) // 60)
     secs = int(uptime.total_seconds() % 60)
@@ -588,9 +484,9 @@ def draw_energy_panel(ax):
             color=COLORS['danger'], ha='center', va='center')
 
     peak_items = [
-        ('V', stats['peak_voltage_time'] or '--', COLORS['voltage']),
-        ('I', stats['peak_current_time'] or '--', COLORS['current']),
-        ('P', stats['peak_power_time'] or '--', COLORS['power']),
+        ('V', stats_str['peak_voltage_time'] or '--', COLORS['voltage']),
+        ('I', stats_str['peak_current_time'] or '--', COLORS['current']),
+        ('P', stats_str['peak_power_time'] or '--', COLORS['power']),
     ]
     for idx, (lbl, t, clr) in enumerate(peak_items):
         cx = 1.8 + idx * 2.8
@@ -620,10 +516,10 @@ def draw_ai_insights_panel(ax):
     ax.plot([0.5, 9.5], [9.05, 9.05], color=COLORS['border'], linewidth=0.8, alpha=0.5)
 
     # ── Health Score ──
-    if ai_state.get('health'):
-        health = ai_state['health']['overall_score']
-        h_color = ai_state['health']['color']
-        h_label = ai_state['health']['label']
+    if ai_health:
+        health = ai_health['overall_score']
+        h_color = ai_health['color']
+        h_label = ai_health['label']
 
         ax.text(5, 7.5, f'{health:.1f}', fontsize=30, fontweight='bold',
                 color=h_color, ha='center', va='center', fontfamily='monospace')
@@ -639,25 +535,26 @@ def draw_ai_insights_panel(ax):
     y_pos = 4.7
     LX = 0.6
 
-    if ai_state.get('fault') and ai_state['fault']['fault_id'] != 0:
-        fault_name = FAULT_CLASSES.get(ai_state['fault']['fault_id'], 'Unknown')
-        conf = ai_state['fault']['confidence'] * 100
+    if ai_fault.get('fault_id', 0) != 0:
+        fault_name = FAULT_CLASSES.get(ai_fault['fault_id'], 'Unknown')
+        conf = float(ai_fault['confidence']) * 100
         ax.text(LX, y_pos, f'FAULT: {fault_name} ({conf:.0f}%)',
                 fontsize=7.5, fontweight='bold', color=COLORS['danger'])
         y_pos -= 0.75
 
-    if ai_state.get('anomaly') and ai_state['anomaly']['is_anomaly']:
-        score = ai_state['anomaly']['score']
+    if ai_anomaly.get('is_anomaly', False):
+        score = ai_anomaly['score']
         ax.text(LX, y_pos, f'ANOMALY (score={score:.2f})',
                 fontsize=7.5, fontweight='bold', color=COLORS['warning'])
         y_pos -= 0.75
 
     # ── Recommendations ──
-    if ai_state.get('insights'):
+    if ai_insights:
         ax.text(LX, y_pos, 'RECOMMENDATIONS', fontsize=6.5,
                 color=COLORS['text_secondary'], fontweight='bold')
         y_pos -= 0.65
-        for rec in ai_state['insights'][:2]:
+        shown_insights = ai_insights[:2] if len(ai_insights) >= 2 else ai_insights
+        for rec in shown_insights:
             title = rec['title'][:42] + '...' if len(rec['title']) > 42 else rec['title']
             ax.text(LX + 0.2, y_pos, f'• {title}',
                     fontsize=7, color=COLORS['text_primary'], fontweight='600')
@@ -755,8 +652,8 @@ def draw_onnx_performance_panel(ax):
         spark_y = 1.6 + (lat_arr - lat_min) / lat_range * 1.8
         ax.fill_between(spark_x, 1.6, spark_y, alpha=0.12, color=COLORS['onnx_cyan'])
         ax.plot(spark_x, spark_y, color=COLORS['onnx_cyan'], linewidth=1.3, alpha=0.85)
-        ax.plot(spark_x[-1], spark_y[-1], 'o', color=COLORS['onnx_cyan'], markersize=4, zorder=5)
-        ax.plot(spark_x[-1], spark_y[-1], 'o', color='white', markersize=1.5, zorder=6, alpha=0.8)
+        ax.plot(spark_x[-1:], spark_y[-1:], 'o', color=COLORS['onnx_cyan'], markersize=4, zorder=5)
+        ax.plot(spark_x[-1:], spark_y[-1:], 'o', color='white', markersize=1.5, zorder=6, alpha=0.8)
 
     # ── Per-Model (compact footer) ──
     ax.plot([LX, RX], [1.2, 1.2], color=COLORS['border'], linewidth=0.4, alpha=0.3)
@@ -847,6 +744,11 @@ plt.show(block=False)
 # ══════════════════════════════════════════════════════════════
 # MAIN LOOP
 # ══════════════════════════════════════════════════════════════
+LOG_FILE = "power_log.csv"
+if not os.path.exists(LOG_FILE):
+    with open(LOG_FILE, "w") as f:
+        f.write("timestamp,voltage,current,power\n")
+
 print("\n" + "═" * 60)
 print("  ESP32 Power Monitor + ONNX ML Dashboard — Running")
 print("  Press Ctrl+C to stop")
@@ -867,6 +769,10 @@ try:
         current_data.append(i)
         power_data.append(p)
 
+        # Log to CSV
+        with open(LOG_FILE, "a") as f:
+            f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')},{v:.2f},{i:.3f},{p:.2f}\n")
+
         # Update statistics
         update_stats(v, i, p)
 
@@ -884,34 +790,56 @@ try:
 
             # ONNX Anomaly Detection
             is_anomaly, score = onnx_converter.infer_anomaly(features)
-            ai_state['anomaly'] = {'is_anomaly': is_anomaly, 'score': score}
+            ai_anomaly.update({'is_anomaly': is_anomaly, 'score': score})
 
             # ONNX Fault Classification
             fault_id, fconf, top3 = onnx_converter.infer_fault(features)
-            ai_state['fault'] = {'fault_id': fault_id, 'confidence': fconf}
+            ai_fault.update({'fault_id': fault_id, 'confidence': fconf})
 
         # ─── FALLBACK: sklearn inference if ONNX not ready ───
-        elif ml_manager and ai_engine and not onnx_models_ready:
-            is_anomaly, score, details = ml_manager.anomaly_detector.detect(v, i, p)
-            ai_state['anomaly'] = {'is_anomaly': is_anomaly, 'score': score}
+        elif ml_manager is not None and ai_engine is not None and not onnx_models_ready:
+            _mm = ml_manager  # local rebind for type narrowing
+            is_anomaly, score, details = _mm.anomaly_detector.detect(v, i, p)
+            ai_anomaly.update({'is_anomaly': is_anomaly, 'score': score})
 
-            fault_pred = ml_manager.fault_classifier.predict_realtime(v, i, p)
-            if fault_pred:
-                fid, fconf, _ = fault_pred
-                ai_state['fault'] = {'fault_id': fid, 'confidence': fconf}
+            if _mm.fault_classifier.is_trained:
+                try:
+                    fault_pred = _mm.fault_classifier.predict_realtime(v, i, p)
+                    if fault_pred:
+                        fid, fconf, _ = fault_pred
+                        ai_fault.update({'fault_id': fid, 'confidence': fconf})
+                except RuntimeError:
+                    pass
 
         # Update Insights Engine
-        if ai_engine:
-            f_dict = {'fault_id': ai_state['fault']['fault_id'], 'confidence': ai_state['fault']['confidence']}
-            ai_engine.update(v, i, p, anomaly_result=ai_state['anomaly'], fault_result=f_dict)
+        if ai_engine is not None:
+            _ae = ai_engine  # local rebind for type narrowing
+            f_dict: Dict[str, Any] = {'fault_id': ai_fault['fault_id'], 'confidence': ai_fault['confidence']}
+            _ae.update(v, i, p, anomaly_result=ai_anomaly, fault_result=f_dict)
 
-            if stats['sample_count'] % 10 == 0:
-                ai_state['health'] = ai_engine.get_health_score()
-                ai_state['insights'] = ai_engine.get_recommendations()
+            if stats_int['sample_count'] % 10 == 0:
+                ai_health.update(_ae.get_health_score())
+                new_recs = _ae.get_recommendations()
+                ai_insights.clear()
+                ai_insights.extend(new_recs)
 
         # Add to forecaster buffer
-        if ml_manager and ml_manager.power_forecaster:
-            ml_manager.power_forecaster.add_point(p, v, i)
+        if ml_manager is not None:
+            _mm2 = ml_manager  # local rebind for type narrowing
+            if _mm2.power_forecaster:
+                _mm2.power_forecaster.add_point(p, v, i)
+
+        # ─── FIREBASE UPLOAD ───────────────────────────────────
+        fb_uploader.enqueue_reading(
+            v, i, p,
+            ai_anomaly=ai_anomaly,
+            ai_fault=ai_fault,
+            ai_health=ai_health,
+            energy_kwh=stats_float['energy_kwh'],
+        )
+        # Push ONNX perf snapshot every 30 samples
+        if stats_int['sample_count'] % ONNX_UPLOAD_EVERY_N == 0:
+            fb_uploader.enqueue_onnx_perf(onnx_monitor.get_stats())
 
         # === RENDER ALL PANELS ===
 
@@ -958,11 +886,11 @@ try:
 except KeyboardInterrupt:
     print("\n\n" + "═" * 60)
     print("  Dashboard stopped by user")
-    print(f"  Total samples: {stats['sample_count']}")
-    print(f"  Total energy: {stats['energy_kwh']:.4f} kWh")
-    print(f"  Estimated cost: {CURRENCY}{stats['energy_kwh'] * COST_PER_KWH:.2f}")
-    if stats['power_max'] > 0:
-        print(f"  Peak: {stats['power_max']:.0f} W @ {stats['peak_power_time']}")
+    print(f"  Total samples: {stats_int['sample_count']}")
+    print(f"  Total energy: {stats_float['energy_kwh']:.4f} kWh")
+    print(f"  Estimated cost: {CURRENCY}{stats_float['energy_kwh'] * COST_PER_KWH:.2f}")
+    if stats_float['power_max'] > 0:
+        print(f"  Peak: {stats_float['power_max']:.0f} W @ {stats_str['peak_power_time']}")
     print(f"\n  ONNX Runtime Performance Summary:")
     perf_final = onnx_monitor.get_stats()
     print(f"    Total inferences: {perf_final['total_inferences']:,}")
@@ -971,6 +899,13 @@ except KeyboardInterrupt:
     print(f"    Throughput:       {perf_final['throughput_ips']:.1f} inf/s")
     print(f"    Errors:           {perf_final['error_count']}")
     print("═" * 60 + "\n")
+    # Push final session summary to Firebase
+    fb_uploader.enqueue_session_summary(
+        sample_count    = stats_int['sample_count'],
+        energy_kwh      = stats_float['energy_kwh'],
+        peak_power      = stats_float['power_max'],
+        peak_power_time = stats_str['peak_power_time'],
+    )
 
 except Exception as e:
     print(f"\n  Error: {e}")
@@ -978,13 +913,18 @@ except Exception as e:
     traceback.print_exc()
 
 finally:
-    if ser and hasattr(ser, 'is_open') and callable(ser.is_open):
+    # Stop Firebase uploader gracefully
+    fb_uploader.stop()
+    if ser and hasattr(ser, 'is_open'):
         try:
-            if ser.is_open():
+            if ser.is_open:
                 ser.close()
                 print("  Serial port closed")
-        except:
+        except Exception:
             pass
     elif ser and hasattr(ser, 'close'):
-        ser.close()
+        try:
+            ser.close()
+        except Exception:
+            pass
     plt.close('all')

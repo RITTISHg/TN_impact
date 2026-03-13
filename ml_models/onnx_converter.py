@@ -176,9 +176,11 @@ class ONNXModelConverter:
             ])
 
             initial_type = [('float_input', FloatTensorType([None, n_features]))]
+            # Use dict to pin ai.onnx.ml domain to v3 (skl2onnx max supported)
+            # newer sklearn/onnx generates ai.onnx.ml v4 which skl2onnx can't handle
             onnx_model = convert_sklearn(
                 pipeline, initial_types=initial_type,
-                target_opset=12,
+                target_opset={'': 12, 'ai.onnx.ml': 3},
                 options={id(model): {'score_samples': True}},
             )
 
@@ -212,9 +214,10 @@ class ONNXModelConverter:
                 ])
 
                 initial_type = [('float_input', FloatTensorType([None, n_features]))]
+                # Pin ai.onnx.ml domain to v3 to avoid opset version mismatch
                 onnx_model = convert_sklearn(
                     pipeline, initial_types=initial_type,
-                    target_opset=12,
+                    target_opset={'': 12, 'ai.onnx.ml': 3},
                     options={id(model): {'zipmap': False}},
                 )
 

@@ -538,64 +538,323 @@ function showToast(message, type = 'success') {
 
 
 // ══════════════════════════════════════════════════════════════
-// INITIALIZATION — Shows UI, waits for real ESP32 data
+// FIREBASE REALTIME DATABASE — Configuration
+// ══════════════════════════════════════════════════════════════
+const FIREBASE_URL = 'https://energy-ml-default-rtdb.firebaseio.com';
+const FB_LIVE_URL      = `${FIREBASE_URL}/power_monitor/live.json`;
+const FB_ONNX_URL      = `${FIREBASE_URL}/power_monitor/onnx_perf.json`;
+const FB_SESSION_URL   = `${FIREBASE_URL}/power_monitor/session.json`;
+const FB_READINGS_URL  = `${FIREBASE_URL}/power_monitor/readings.json?orderBy="$key"&limitToLast=80`;
+const FB_ALERTS_URL    = `${FIREBASE_URL}/power_monitor/alerts.json?orderBy="$key"&limitToLast=10`;
+
+// ── Firebase connection state ──
+const fbState = {
+    lastTimestamp: null,      // detect stale data
+    consecutiveErrors: 0,
+    connected: false,
+    lastOnnxUpdate: 0,
+    lastHistoryUpdate: 0,
+    onnxSessionStart: Date.now(),
+};
+
+// ══════════════════════════════════════════════════════════════
+// FIREBASE LIVE POLLER  (every 1 second)
+// ══════════════════════════════════════════════════════════════
+async function pollFirebaseLive() {
+    try {
+        const res = await fetch(FB_LIVE_URL, { cache: 'no-store' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const d = await res.json();
+        if (!d || d.test_mode) return;   // skip test data
+
+        // ── Detect stale / duplicate reading ──
+        if (d.timestamp === fbState.lastTimestamp) return;
+        fbState.lastTimestamp = d.timestamp;
+        fbState.consecutiveErrors = 0;
+
+        // ── Connection status ──
+        if (!fbState.connected) {
+            fbState.connected = true;
+            state.connected = true;
+            document.getElementById('connectionStatus').querySelector('.status-dot').classList.remove('offline');
+            document.getElementById('connectionStatus').querySelector('.status-text').textContent = 'Firebase Live';
+            showToast('Connected to Firebase — live data streaming!', 'success');
+        }
+
+        // ── Core sensor values ──
+        const v = sanitizeNumber(d.voltage,  0, 0, 500);
+        const c = sanitizeNumber(d.current,  0, 0, 100);
+        const p = sanitizeNumber(d.power,    0, 0, 50000);
+        updateFromESP32(v, c, p);
+
+        // ── Override energy with server-computed value (more accurate) ──
+        if (d.energy_kwh != null) {
+            const ekwh = sanitizeNumber(d.energy_kwh, 0, 0, 1e6);
+            state.energy = ekwh;
+            state.energyToday  = ekwh;   // session-scoped
+            state.energyWeek   = ekwh;
+            state.energyMonth  = ekwh;
+            document.getElementById('energyValue').textContent  = ekwh.toFixed(4);
+            document.getElementById('energyCost').textContent   = CONFIG.currency + (ekwh * CONFIG.costPerUnit).toFixed(2);
+            document.getElementById('energyToday').textContent  = ekwh.toFixed(4);
+            document.getElementById('energyWeek').textContent   = ekwh.toFixed(4);
+            document.getElementById('energyMonth').textContent  = ekwh.toFixed(4);
+            document.getElementById('auditToday').textContent   = ekwh.toFixed(4) + ' kWh';
+            document.getElementById('auditTodayCost').textContent = CONFIG.currency + (ekwh * CONFIG.costPerUnit).toFixed(2);
+            document.getElementById('auditWeek').textContent    = ekwh.toFixed(4) + ' kWh';
+            document.getElementById('auditWeekCost').textContent  = CONFIG.currency + (ekwh * CONFIG.costPerUnit).toFixed(2);
+            document.getElementById('auditMonth').textContent   = ekwh.toFixed(4) + ' kWh';
+            document.getElementById('auditMonthCost').textContent = CONFIG.currency + (ekwh * CONFIG.costPerUnit).toFixed(2);
+            document.getElementById('auditTotal').textContent   = ekwh.toFixed(4) + ' kWh';
+            document.getElementById('auditTotalCost').textContent = CONFIG.currency + (ekwh * CONFIG.costPerUnit).toFixed(2);
+        }
+
+        // ── AI — Anomaly ──
+        if (d.anomaly) {
+            aiState.isAnomaly    = !!d.anomaly.is_anomaly;
+            aiState.anomalyScore = sanitizeNumber(d.anomaly.score, 0, 0, 1);
+        }
+
+        // ── AI — Fault ──
+        if (d.fault) {
+            aiState.faultId         = sanitizeNumber(d.fault.fault_id, 0, 0, 9);
+            aiState.faultName       = escapeHTML(String(d.fault.fault_name || 'Normal'));
+            aiState.faultConfidence = sanitizeNumber(d.fault.confidence, 1, 0, 1);
+        }
+
+        // ── AI — Health ──
+        if (d.health) {
+            const hs = sanitizeNumber(d.health.score, 100, 0, 100);
+            aiState.healthScore = hs;
+            aiState.healthLabel = escapeHTML(String(d.health.label || 'Unknown'));
+            // Color by score
+            if (hs >= 85)      aiState.healthColor = '#22c55e';
+            else if (hs >= 60) aiState.healthColor = '#eab308';
+            else               aiState.healthColor = '#ef4444';
+        }
+
+        updateAIPanel();
+
+    } catch (err) {
+        fbState.consecutiveErrors++;
+        if (fbState.consecutiveErrors >= 5 && fbState.connected) {
+            fbState.connected = false;
+            state.connected   = false;
+            document.getElementById('connectionStatus').querySelector('.status-dot').classList.add('offline');
+            document.getElementById('connectionStatus').querySelector('.status-text').textContent = 'Firebase Disconnected';
+            showToast('Firebase connection lost — retrying…', 'error');
+        }
+    }
+}
+
+// ══════════════════════════════════════════════════════════════
+// FIREBASE ONNX PERF POLLER  (every 3 seconds)
+// ══════════════════════════════════════════════════════════════
+async function pollFirebaseOnnx() {
+    try {
+        const res = await fetch(FB_ONNX_URL, { cache: 'no-store' });
+        if (!res.ok) return;
+        const d = await res.json();
+        if (!d || d.test) return;
+
+        const inferences = sanitizeNumber(d.total_inferences, 0, 0, 1e9);
+        if (inferences === 0) return;
+
+        const avgMs  = sanitizeNumber(d.avg_latency_ms,  0, 0, 5000);
+        const p95Ms  = sanitizeNumber(d.p95_latency_ms,  0, 0, 5000);
+        const tput   = sanitizeNumber(d.throughput_ips,  0, 0, 1e6);
+        const errors = sanitizeNumber(d.error_count,     0, 0, 1e6);
+
+        // Sync ONNX state for the panel
+        onnxState.totalInferences = inferences;
+        onnxState.errors = errors;
+
+        // Synthesize a latency history entry so the sparkline stays live
+        if (avgMs > 0) {
+            onnxState.latencies.push(avgMs);
+            if (onnxState.latencies.length > onnxState.maxHistory)
+                onnxState.latencies.shift();
+        }
+
+        // Direct DOM updates for exact server values
+        document.getElementById('onnxInferences').textContent  = inferences.toLocaleString();
+        document.getElementById('onnxThroughput').textContent  = tput.toFixed(1);
+        document.getElementById('onnxAvgLatency').textContent  = avgMs.toFixed(2);
+        document.getElementById('onnxP95').textContent         = p95Ms.toFixed(3);
+
+        // Update sparkline
+        const recent = onnxState.latencies.slice(-60);
+        onnxSparklineChart.data.labels = recent.map((_, i) => i);
+        onnxSparklineChart.data.datasets[0].data = recent;
+        onnxSparklineChart.update('none');
+
+        const errEl = document.getElementById('onnxErrorStatus');
+        if (errors > 0) { errEl.textContent = `⚠ ${errors} Errors`; errEl.className = 'onnx-footer err'; }
+        else            { errEl.textContent = '✓ Zero Errors';       errEl.className = 'onnx-footer ok'; }
+
+    } catch (_) { /* silent — non-critical */ }
+}
+
+// ══════════════════════════════════════════════════════════════
+// FIREBASE HISTORY POLLER  (every 10 seconds)
+// Power Distribution chart + Voltage Stability + Energy Trend
+// ══════════════════════════════════════════════════════════════
+async function pollFirebaseHistory() {
+    try {
+        const res = await fetch(FB_READINGS_URL, { cache: 'no-store' });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!data) return;
+
+        const rows = Object.values(data).filter(r => r && !r.test_mode);
+        if (rows.length === 0) return;
+
+        // ── Voltage Stability scatter ──
+        voltageStabilityChart.data.datasets[0].data = rows.map((r, i) => ({
+            x: i, y: sanitizeNumber(r.voltage, 230, 0, 500)
+        }));
+        voltageStabilityChart.update('none');
+
+        // ── Load Profile doughnut ──
+        let light = 0, medium = 0, heavy = 0, idle = 0;
+        rows.forEach(r => {
+            const pw = sanitizeNumber(r.power, 0, 0, 50000);
+            if      (pw < 50)   idle++;
+            else if (pw < 500)  light++;
+            else if (pw < 1500) medium++;
+            else                heavy++;
+        });
+        const total = rows.length;
+        loadProfileChart.data.datasets[0].data = [
+            Math.round(light/total*100), Math.round(medium/total*100),
+            Math.round(heavy/total*100), Math.round(idle/total*100)
+        ];
+        loadProfileChart.update('none');
+
+        // ── Power Distribution bar (bin into 12 x 2h slots by timestamp hour) ──
+        const hourBins = new Array(12).fill(0);
+        const hourCounts = new Array(12).fill(0);
+        rows.forEach(r => {
+            if (!r.timestamp) return;
+            const h = new Date(r.timestamp).getHours();
+            const slot = Math.floor(h / 2);
+            hourBins[slot] += sanitizeNumber(r.power, 0, 0, 50000);
+            hourCounts[slot]++;
+        });
+        powerDistChart.data.datasets[0].data = hourBins.map((sum, i) =>
+            hourCounts[i] > 0 ? Math.round(sum / hourCounts[i]) : 0
+        );
+        powerDistChart.update('none');
+
+        // ── Energy Trend — last reading per day ──
+        const byDay = {};
+        rows.forEach(r => {
+            if (!r.timestamp || !r.energy_kwh) return;
+            const day = r.timestamp.slice(0, 10);
+            byDay[day] = Math.max(byDay[day] || 0, sanitizeNumber(r.energy_kwh, 0, 0, 1e6));
+        });
+        const sortedDays = Object.keys(byDay).sort().slice(-7);
+        if (sortedDays.length > 0) {
+            energyTrendChart.data.labels   = sortedDays.map(d => {
+                const dt = new Date(d);
+                return dt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+            });
+            energyTrendChart.data.datasets[0].data = sortedDays.map(d => +(byDay[d] || 0).toFixed(4));
+            energyTrendChart.update('none');
+        }
+
+    } catch (_) { /* silent */ }
+}
+
+// ══════════════════════════════════════════════════════════════
+// FIREBASE ALERTS LOG  (every 5 seconds)
+// Shows last 10 alerts in the Reports → Log table
+// ══════════════════════════════════════════════════════════════
+async function pollFirebaseAlerts() {
+    try {
+        const res = await fetch(FB_ALERTS_URL, { cache: 'no-store' });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!data) return;
+
+        const alerts = Object.values(data).reverse().slice(0, 10);
+        // Merge into logEntries for the CSV download & table display
+        alerts.forEach(a => {
+            if (!a || !a.timestamp) return;
+            const ts = new Date(a.timestamp).toLocaleTimeString('en-US', { hour12: false });
+            const exists = state.logEntries.some(e => e.time === ts && e._alert);
+            if (!exists) {
+                state.logEntries.unshift({
+                    time: ts, v: a.voltage || 0, c: a.current || 0, p: a.power || 0,
+                    energy: state.energy.toFixed(4),
+                    status: a.severity === 'critical' ? 'danger' : 'warning',
+                    statusText: escapeHTML(a.type + ': ' + (a.detail || '')).slice(0, 40),
+                    _alert: true
+                });
+            }
+        });
+        if (state.logEntries.length > 200) state.logEntries.length = 200;
+        updateLogTable();
+    } catch (_) { /* silent */ }
+}
+
+// ══════════════════════════════════════════════════════════════
+// FIREBASE SESSION SUMMARY  (on load, then every 30 seconds)
+// Populates peak cards from the server session data
+// ══════════════════════════════════════════════════════════════
+async function pollFirebaseSession() {
+    try {
+        const res = await fetch(FB_SESSION_URL, { cache: 'no-store' });
+        if (!res.ok) return;
+        const d = await res.json();
+        if (!d || !d.peak_power_w) return;
+
+        const pk = sanitizeNumber(d.peak_power_w, 0, 0, 50000);
+        if (pk > state.peakPower.value) {
+            state.peakPower = { value: pk, time: d.peak_power_time || '--' };
+            document.getElementById('peakPower').textContent     = pk.toFixed(0) + ' W';
+            document.getElementById('peakPowerTime').textContent = d.peak_power_time || '--';
+            document.getElementById('powerPeak').textContent     = pk.toFixed(0);
+        }
+    } catch (_) { /* silent */ }
+}
+
+// ══════════════════════════════════════════════════════════════
+// INITIALIZATION
 // ══════════════════════════════════════════════════════════════
 function init() {
     updateClock();
     setInterval(updateClock, 1000);
 
-    // Show waiting state
+    // Show connecting state
     document.getElementById('connectionStatus').querySelector('.status-dot').classList.add('offline');
-    document.getElementById('connectionStatus').querySelector('.status-text').textContent = 'Waiting for ESP32...';
+    document.getElementById('connectionStatus').querySelector('.status-text').textContent = 'Connecting to Firebase…';
 
-    showToast('Waiting for ESP32 data — connect your device', 'warning');
+    showToast('Connecting to Firebase Realtime Database…', 'warning');
+
+    // ── Start pollers ──
+    pollFirebaseLive();                                  // immediate first fetch
+    setInterval(pollFirebaseLive,   1000);               // live:    every 1s
+
+    setTimeout(() => {
+        pollFirebaseOnnx();
+        setInterval(pollFirebaseOnnx,   3000);           // ONNX:    every 3s
+    }, 1500);
+
+    setTimeout(() => {
+        pollFirebaseHistory();
+        setInterval(pollFirebaseHistory, 10000);         // history: every 10s
+    }, 3000);
+
+    setTimeout(() => {
+        pollFirebaseAlerts();
+        setInterval(pollFirebaseAlerts,  5000);          // alerts:  every 5s
+    }, 2000);
+
+    setTimeout(() => {
+        pollFirebaseSession();
+        setInterval(pollFirebaseSession, 30000);         // session: every 30s
+    }, 4000);
 }
 
 document.addEventListener('DOMContentLoaded', init);
-
-
-// ══════════════════════════════════════════════════════════════
-// INTEGRATION EXAMPLES (uncomment the one you need)
-// ══════════════════════════════════════════════════════════════
-
-/*
-// ── Option 1: WebSocket ──
-const ws = new WebSocket('ws://YOUR_ESP32_IP/ws');
-ws.onmessage = (event) => {
-    const data = JSON.parse(event.data);
-    updateFromESP32(data.voltage, data.current, data.power);
-};
-
-// ── Option 2: HTTP Polling ──
-setInterval(async () => {
-    try {
-        const res = await fetch('http://YOUR_ESP32_IP/data');
-        const data = await res.json();
-        updateFromESP32(data.voltage, data.current, data.power);
-    } catch (e) {
-        console.error('ESP32 fetch error:', e);
-    }
-}, 1000);
-
-// ── Option 3: Web Serial API (Chrome only) ──
-async function connectSerial() {
-    const port = await navigator.serial.requestPort();
-    await port.open({ baudRate: 115200 });
-    const reader = port.readable.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value);
-        const lines = buffer.split('\n');
-        buffer = lines.pop();
-        for (const line of lines) {
-            const match = line.match(/Vrms:\s([\d.]+).*Current:\s([\d.]+).*Power:\s([\d.]+)/);
-            if (match) {
-                updateFromESP32(parseFloat(match[1]), parseFloat(match[2]), parseFloat(match[3]));
-            }
-        }
-    }
-}
-*/
