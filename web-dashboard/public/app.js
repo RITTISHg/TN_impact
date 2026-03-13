@@ -520,7 +520,49 @@ function saveSettings() {
     CONFIG.voltageLowThreshold = sanitizeNumber(document.getElementById('voltageLow').value, 200, 50, 400);
     CONFIG.currentMaxThreshold = sanitizeNumber(document.getElementById('currentMax').value, 15, 1, 100);
     CONFIG.powerMaxThreshold = sanitizeNumber(document.getElementById('powerMax').value, 3000, 100, 50000);
+
+    // Persist to localStorage
+    localStorage.setItem('powerMonitor_generalSettings', JSON.stringify({
+        costPerUnit: CONFIG.costPerUnit,
+        currency: CONFIG.currency,
+        voltageHighThreshold: CONFIG.voltageHighThreshold,
+        voltageLowThreshold: CONFIG.voltageLowThreshold,
+        currentMaxThreshold: CONFIG.currentMaxThreshold,
+        powerMaxThreshold: CONFIG.powerMaxThreshold,
+    }));
+
+    showSavePopup('⚙️ Settings Saved!', [
+        `Voltage Alert: ${CONFIG.voltageLowThreshold}V – ${CONFIG.voltageHighThreshold}V`,
+        `Current Max: ${CONFIG.currentMaxThreshold}A`,
+        `Power Max: ${CONFIG.powerMaxThreshold}W`,
+        `Cost: ${CONFIG.currency}${CONFIG.costPerUnit}/kWh`,
+    ]);
     showToast('Settings saved successfully!', 'success');
+}
+
+// Load general settings from localStorage on startup
+function loadGeneralSettings() {
+    try {
+        const saved = localStorage.getItem('powerMonitor_generalSettings');
+        if (saved) {
+            const s = JSON.parse(saved);
+            CONFIG.costPerUnit = s.costPerUnit ?? 6.50;
+            CONFIG.currency = s.currency ?? '₹';
+            CONFIG.voltageHighThreshold = s.voltageHighThreshold ?? 250;
+            CONFIG.voltageLowThreshold = s.voltageLowThreshold ?? 200;
+            CONFIG.currentMaxThreshold = s.currentMaxThreshold ?? 15;
+            CONFIG.powerMaxThreshold = s.powerMaxThreshold ?? 3000;
+
+            document.getElementById('costPerUnit').value = CONFIG.costPerUnit;
+            document.getElementById('currency').value = CONFIG.currency;
+            document.getElementById('voltageHigh').value = CONFIG.voltageHighThreshold;
+            document.getElementById('voltageLow').value = CONFIG.voltageLowThreshold;
+            document.getElementById('currentMax').value = CONFIG.currentMaxThreshold;
+            document.getElementById('powerMax').value = CONFIG.powerMaxThreshold;
+        }
+    } catch (e) {
+        console.warn('[Settings] Failed to load:', e);
+    }
 }
 
 function showToast(message, type = 'success') {
@@ -534,6 +576,100 @@ function showToast(message, type = 'success') {
     toast.appendChild(iconSpan); toast.appendChild(msgSpan);
     container.appendChild(toast);
     setTimeout(() => { toast.classList.add('fade-out'); setTimeout(() => toast.remove(), 300); }, 3000);
+}
+
+// ── Big centered popup for settings saves (visible from hackathon stage) ──
+function showSavePopup(title, details) {
+    // Remove existing popup if any
+    const existing = document.getElementById('savePopupOverlay');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'savePopupOverlay';
+    overlay.style.cssText = `
+        position:fixed;top:0;left:0;width:100%;height:100%;z-index:99999;
+        background:rgba(0,0,0,0.6);backdrop-filter:blur(8px);
+        display:flex;align-items:center;justify-content:center;
+        animation:fadeIn 0.3s ease;
+    `;
+
+    const popup = document.createElement('div');
+    popup.style.cssText = `
+        background:linear-gradient(135deg,#111827 0%,#1e293b 100%);
+        border:1px solid rgba(34,197,94,0.3);border-radius:20px;
+        padding:32px 40px;text-align:center;max-width:420px;width:90%;
+        box-shadow:0 25px 60px rgba(0,0,0,0.5),0 0 40px rgba(34,197,94,0.15);
+        animation:popIn 0.4s cubic-bezier(0.34,1.56,0.64,1);
+    `;
+
+    const checkmark = document.createElement('div');
+    checkmark.style.cssText = `
+        font-size:56px;margin-bottom:12px;
+        animation:bounceIn 0.5s ease 0.2s both;
+    `;
+    checkmark.textContent = '✅';
+
+    const titleEl = document.createElement('div');
+    titleEl.style.cssText = `
+        font-size:22px;font-weight:800;color:#f1f5f9;margin-bottom:16px;
+        font-family:'Inter',sans-serif;
+    `;
+    titleEl.textContent = title;
+
+    const detailsEl = document.createElement('div');
+    detailsEl.style.cssText = `
+        text-align:left;background:rgba(0,0,0,0.3);border-radius:12px;
+        padding:14px 18px;margin-bottom:18px;
+    `;
+    details.forEach(d => {
+        const line = document.createElement('div');
+        line.style.cssText = `
+            font-size:13px;color:#94a3b8;padding:4px 0;
+            font-family:'JetBrains Mono',monospace;
+            border-bottom:1px solid rgba(255,255,255,0.05);
+        `;
+        line.textContent = d;
+        detailsEl.appendChild(line);
+    });
+
+    const hint = document.createElement('div');
+    hint.style.cssText = 'font-size:11px;color:#64748b;';
+    hint.textContent = 'Settings saved to browser — click to close';
+
+    popup.appendChild(checkmark);
+    popup.appendChild(titleEl);
+    popup.appendChild(detailsEl);
+    popup.appendChild(hint);
+    overlay.appendChild(popup);
+    document.body.appendChild(overlay);
+
+    // Add keyframe styles if not already added
+    if (!document.getElementById('popupAnimStyles')) {
+        const style = document.createElement('style');
+        style.id = 'popupAnimStyles';
+        style.textContent = `
+            @keyframes fadeIn { from{opacity:0} to{opacity:1} }
+            @keyframes popIn { from{opacity:0;transform:scale(0.7)} to{opacity:1;transform:scale(1)} }
+            @keyframes bounceIn { from{opacity:0;transform:scale(0.3)} 50%{transform:scale(1.1)} to{opacity:1;transform:scale(1)} }
+        `;
+        document.head.appendChild(style);
+    }
+
+    // Click to close
+    overlay.addEventListener('click', () => {
+        overlay.style.opacity = '0';
+        overlay.style.transition = 'opacity 0.3s ease';
+        setTimeout(() => overlay.remove(), 300);
+    });
+
+    // Auto-close after 3 seconds
+    setTimeout(() => {
+        if (document.body.contains(overlay)) {
+            overlay.style.opacity = '0';
+            overlay.style.transition = 'opacity 0.3s ease';
+            setTimeout(() => overlay.remove(), 300);
+        }
+    }, 3000);
 }
 
 
@@ -558,7 +694,7 @@ const fbState = {
 };
 
 // ══════════════════════════════════════════════════════════════
-// FIREBASE LIVE POLLER  (every 1 second)
+// FIREBASE LIVE POLLER  (every 500ms for low-latency updates)
 // ══════════════════════════════════════════════════════════════
 async function pollFirebaseLive() {
     try {
@@ -634,6 +770,9 @@ async function pollFirebaseLive() {
         }
 
         updateAIPanel();
+
+        // ── Email alerts — check thresholds ──
+        checkEmailThresholds(v, c, p);
 
     } catch (err) {
         fbState.consecutiveErrors++;
@@ -820,6 +959,213 @@ async function pollFirebaseSession() {
 }
 
 // ══════════════════════════════════════════════════════════════
+// EMAIL ALERT ENGINE (EmailJS)
+// ══════════════════════════════════════════════════════════════
+const emailAlert = {
+    enabled: false,
+    serviceId: 'service_02p01dl',
+    templateId: 'template_3zh2atr',
+    publicKey: 'zthpelV1k5lIP5d_Z',
+    recipientEmail: '',
+    // Demo-friendly thresholds (easy to trigger)
+    thresholds: {
+        voltageHigh: 240,
+        voltageLow: 210,
+        currentMax: 5,
+        powerMax: 1000,
+    },
+    cooldownSec: 30,
+    lastEmailTime: 0,
+    emailsSent: 0,
+};
+
+// ── Load saved settings from localStorage ──
+function loadEmailSettings() {
+    try {
+        const saved = localStorage.getItem('powerMonitor_emailAlert');
+        if (saved) {
+            const s = JSON.parse(saved);
+            emailAlert.serviceId = s.serviceId || '';
+            emailAlert.templateId = s.templateId || '';
+            emailAlert.publicKey = s.publicKey || '';
+            emailAlert.recipientEmail = s.recipientEmail || '';
+            emailAlert.thresholds.voltageHigh = s.voltageHigh ?? 240;
+            emailAlert.thresholds.voltageLow = s.voltageLow ?? 210;
+            emailAlert.thresholds.currentMax = s.currentMax ?? 5;
+            emailAlert.thresholds.powerMax = s.powerMax ?? 1000;
+            emailAlert.cooldownSec = s.cooldownSec ?? 30;
+
+            // Populate fields
+            document.getElementById('emailjsServiceId').value = emailAlert.serviceId;
+            document.getElementById('emailjsTemplateId').value = emailAlert.templateId;
+            document.getElementById('emailjsPublicKey').value = emailAlert.publicKey;
+            document.getElementById('alertEmail').value = emailAlert.recipientEmail;
+            document.getElementById('emailVoltageHigh').value = emailAlert.thresholds.voltageHigh;
+            document.getElementById('emailVoltageLow').value = emailAlert.thresholds.voltageLow;
+            document.getElementById('emailCurrentMax').value = emailAlert.thresholds.currentMax;
+            document.getElementById('emailPowerMax').value = emailAlert.thresholds.powerMax;
+            document.getElementById('emailCooldown').value = emailAlert.cooldownSec;
+
+            // Enable if all required fields are set
+            if (emailAlert.serviceId && emailAlert.templateId && emailAlert.publicKey && emailAlert.recipientEmail) {
+                emailAlert.enabled = true;
+                emailjs.init(emailAlert.publicKey);
+                document.getElementById('emailAlertStatus').textContent = `✅ Enabled — alerts sent to ${emailAlert.recipientEmail}`;
+                document.getElementById('emailAlertStatus').style.color = '#22c55e';
+            }
+        }
+    } catch (e) {
+        console.warn('[EmailAlert] Failed to load settings:', e);
+    }
+}
+
+// ── Save settings ──
+function saveEmailSettings() {
+    emailAlert.serviceId = document.getElementById('emailjsServiceId').value.trim();
+    emailAlert.templateId = document.getElementById('emailjsTemplateId').value.trim();
+    emailAlert.publicKey = document.getElementById('emailjsPublicKey').value.trim();
+    emailAlert.recipientEmail = document.getElementById('alertEmail').value.trim();
+    emailAlert.thresholds.voltageHigh = sanitizeNumber(document.getElementById('emailVoltageHigh').value, 240, 100, 500);
+    emailAlert.thresholds.voltageLow = sanitizeNumber(document.getElementById('emailVoltageLow').value, 210, 50, 400);
+    emailAlert.thresholds.currentMax = sanitizeNumber(document.getElementById('emailCurrentMax').value, 5, 0.1, 100);
+    emailAlert.thresholds.powerMax = sanitizeNumber(document.getElementById('emailPowerMax').value, 1000, 10, 50000);
+    emailAlert.cooldownSec = sanitizeNumber(document.getElementById('emailCooldown').value, 30, 10, 600);
+
+    // Validate
+    if (!emailAlert.serviceId || !emailAlert.templateId || !emailAlert.publicKey || !emailAlert.recipientEmail) {
+        showToast('Please fill in all EmailJS fields!', 'error');
+        return;
+    }
+
+    // Save to localStorage
+    localStorage.setItem('powerMonitor_emailAlert', JSON.stringify({
+        serviceId: emailAlert.serviceId,
+        templateId: emailAlert.templateId,
+        publicKey: emailAlert.publicKey,
+        recipientEmail: emailAlert.recipientEmail,
+        voltageHigh: emailAlert.thresholds.voltageHigh,
+        voltageLow: emailAlert.thresholds.voltageLow,
+        currentMax: emailAlert.thresholds.currentMax,
+        powerMax: emailAlert.thresholds.powerMax,
+        cooldownSec: emailAlert.cooldownSec,
+    }));
+
+    // Initialize EmailJS
+    emailjs.init(emailAlert.publicKey);
+    emailAlert.enabled = true;
+
+    document.getElementById('emailAlertStatus').textContent = `✅ Enabled — alerts sent to ${emailAlert.recipientEmail}`;
+    document.getElementById('emailAlertStatus').style.color = '#22c55e';
+
+    showSavePopup('📧 Email Alerts Enabled!', [
+        `Recipient: ${emailAlert.recipientEmail}`,
+        `High Voltage Alert: > ${emailAlert.thresholds.voltageHigh}V`,
+        `Low Voltage Alert: < ${emailAlert.thresholds.voltageLow}V`,
+        `Max Current Alert: > ${emailAlert.thresholds.currentMax}A`,
+        `Max Power Alert: > ${emailAlert.thresholds.powerMax}W`,
+        `Cooldown: ${emailAlert.cooldownSec}s between emails`,
+    ]);
+    showToast('Email alerts enabled! Alerts will fire when thresholds are breached.', 'success');
+}
+
+// ── Send alert email ──
+function sendEmailAlert(alertType, details) {
+    if (!emailAlert.enabled) return;
+
+    // Cooldown check — prevent email spam
+    const now = Date.now();
+    if ((now - emailAlert.lastEmailTime) < emailAlert.cooldownSec * 1000) {
+        console.log(`[EmailAlert] Cooldown active — skipping (${Math.round((emailAlert.cooldownSec * 1000 - (now - emailAlert.lastEmailTime)) / 1000)}s remaining)`);
+        return;
+    }
+    emailAlert.lastEmailTime = now;
+    emailAlert.emailsSent++;
+
+    const timeStr = new Date().toLocaleString('en-IN', { hour12: true, timeZone: 'Asia/Kolkata' });
+
+    const templateParams = {
+        to_email: emailAlert.recipientEmail,
+        alert_type: alertType,
+        alert_details: details,
+        voltage: state.voltage.length > 0 ? state.voltage[state.voltage.length - 1].toFixed(1) : '0',
+        current: state.current.length > 0 ? state.current[state.current.length - 1].toFixed(3) : '0',
+        power: state.power.length > 0 ? state.power[state.power.length - 1].toFixed(1) : '0',
+        energy: state.energy.toFixed(4),
+        timestamp: timeStr,
+        health_score: aiState.healthScore.toFixed(1),
+        fault_status: aiState.faultId !== 0 ? aiState.faultName : 'Normal',
+        threshold_voltage_high: emailAlert.thresholds.voltageHigh,
+        threshold_voltage_low: emailAlert.thresholds.voltageLow,
+        threshold_current_max: emailAlert.thresholds.currentMax,
+        threshold_power_max: emailAlert.thresholds.powerMax,
+    };
+
+    emailjs.send(emailAlert.serviceId, emailAlert.templateId, templateParams)
+        .then(() => {
+            console.log(`[EmailAlert] ✅ Alert sent: ${alertType}`);
+            showToast(`📧 Email alert sent: ${alertType}`, 'success');
+            document.getElementById('emailAlertStatus').textContent =
+                `✅ Last alert: ${alertType} at ${timeStr} (${emailAlert.emailsSent} total)`;
+            document.getElementById('emailAlertStatus').style.color = '#22c55e';
+        })
+        .catch((err) => {
+            console.error('[EmailAlert] ❌ Failed:', err);
+            showToast(`Email alert failed: ${err.text || err}`, 'error');
+            document.getElementById('emailAlertStatus').textContent = `❌ Send failed: ${err.text || err}`;
+            document.getElementById('emailAlertStatus').style.color = '#ef4444';
+        });
+}
+
+// ── Test alert button ──
+function sendTestEmailAlert() {
+    if (!emailAlert.serviceId || !emailAlert.templateId || !emailAlert.publicKey || !emailAlert.recipientEmail) {
+        // Try saving first
+        saveEmailSettings();
+        if (!emailAlert.enabled) return;
+    }
+
+    // Force bypass cooldown for test
+    emailAlert.lastEmailTime = 0;
+    sendEmailAlert(
+        '🧪 TEST ALERT',
+        'This is a test alert from the ESP32 Power Monitor Dashboard. If you received this email, your alert system is working correctly!'
+    );
+}
+
+// ── Check thresholds on every live reading ──
+function checkEmailThresholds(v, c, p) {
+    if (!emailAlert.enabled) return;
+
+    const alerts = [];
+
+    if (v > emailAlert.thresholds.voltageHigh) {
+        alerts.push(`⚠️ HIGH VOLTAGE: ${v.toFixed(1)}V exceeds ${emailAlert.thresholds.voltageHigh}V threshold`);
+    }
+    if (v > 0 && v < emailAlert.thresholds.voltageLow) {
+        alerts.push(`⚠️ LOW VOLTAGE: ${v.toFixed(1)}V below ${emailAlert.thresholds.voltageLow}V threshold`);
+    }
+    if (c > emailAlert.thresholds.currentMax) {
+        alerts.push(`⚠️ OVERCURRENT: ${c.toFixed(2)}A exceeds ${emailAlert.thresholds.currentMax}A threshold`);
+    }
+    if (p > emailAlert.thresholds.powerMax) {
+        alerts.push(`⚠️ OVERLOAD: ${p.toFixed(0)}W exceeds ${emailAlert.thresholds.powerMax}W threshold`);
+    }
+
+    // Also check AI fault
+    if (aiState.faultId !== 0) {
+        alerts.push(`🤖 AI FAULT DETECTED: ${aiState.faultName} (${(aiState.faultConfidence * 100).toFixed(0)}% confidence)`);
+    }
+
+    if (alerts.length > 0) {
+        sendEmailAlert(
+            `⚡ POWER ALERT (${alerts.length} issue${alerts.length > 1 ? 's' : ''})`,
+            alerts.join('\n')
+        );
+    }
+}
+
+
+// ══════════════════════════════════════════════════════════════
 // INITIALIZATION
 // ══════════════════════════════════════════════════════════════
 function init() {
@@ -832,9 +1178,13 @@ function init() {
 
     showToast('Connecting to Firebase Realtime Database…', 'warning');
 
+    // Load saved settings from previous session
+    loadGeneralSettings();
+    loadEmailSettings();
+
     // ── Start pollers ──
     pollFirebaseLive();                                  // immediate first fetch
-    setInterval(pollFirebaseLive,   1000);               // live:    every 1s
+    setInterval(pollFirebaseLive,   500);                // live:    every 500ms (low-latency)
 
     setTimeout(() => {
         pollFirebaseOnnx();
@@ -858,3 +1208,4 @@ function init() {
 }
 
 document.addEventListener('DOMContentLoaded', init);
+

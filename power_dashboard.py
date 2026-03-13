@@ -202,7 +202,7 @@ ai_insights: List[Dict[str, Any]] = []
 # ══════════════════════════════════════════════════════════════
 print(f"\n  Connecting to ESP32 on {PORT} @ {BAUD} baud...")
 try:
-    ser = serial.Serial(PORT, BAUD, timeout=1)
+    ser = serial.Serial(PORT, BAUD, timeout=0.2)
     print(f"  ✅ ESP32 connected successfully!\n")
 except Exception as e:
     print(f"  [!] Failed to connect to ESP32 on {PORT}: {e}")
@@ -749,10 +749,15 @@ if not os.path.exists(LOG_FILE):
     with open(LOG_FILE, "w") as f:
         f.write("timestamp,voltage,current,power\n")
 
+# Open CSV file handle once (persistent) instead of open/close every reading
+_csv_fh = open(LOG_FILE, "a", buffering=1)   # line-buffered
+
 print("\n" + "═" * 60)
 print("  ESP32 Power Monitor + ONNX ML Dashboard — Running")
 print("  Press Ctrl+C to stop")
 print("═" * 60 + "\n")
+
+_frame_counter: int = 0   # tracks frames for throttled rendering
 
 try:
     while True:
@@ -763,15 +768,19 @@ try:
         if not values:
             continue
         v, i, p = values
+        _frame_counter += 1
+
+        # Debug: log every 10th reading to console so we can verify sensor data
+        if stats_int['sample_count'] % 10 == 0:
+            print(f"  [RAW] '{raw}' → V={v:.2f}  I={i:.3f}  P={p:.1f} W")
 
         # Store data
         voltage_data.append(v)
         current_data.append(i)
         power_data.append(p)
 
-        # Log to CSV
-        with open(LOG_FILE, "a") as f:
-            f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')},{v:.2f},{i:.3f},{p:.2f}\n")
+        # Log to CSV (persistent handle, no open/close overhead)
+        _csv_fh.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')},{v:.2f},{i:.3f},{p:.2f}\n")
 
         # Update statistics
         update_stats(v, i, p)
@@ -841,25 +850,20 @@ try:
         if stats_int['sample_count'] % ONNX_UPLOAD_EVERY_N == 0:
             fb_uploader.enqueue_onnx_perf(onnx_monitor.get_stats())
 
-        # === RENDER ALL PANELS ===
+        # === RENDER PANELS (throttled for performance) ===
 
-        # Voltage Gauge
+        # Gauge updates every frame (cheap)
         draw_gauge_arc(ax_gauge, v, 300, COLORS['voltage'], COLORS['voltage_glow'],
                        'VOLTAGE', 'Vrms')
 
-        # Stats Panel
-        draw_stats_panel(ax_stats, v, i, p)
+        # Heavy text panels only every 3rd frame (~saves 200ms/frame)
+        if _frame_counter % 3 == 0:
+            draw_stats_panel(ax_stats, v, i, p)
+            draw_energy_panel(ax_energy)
+            draw_ai_insights_panel(ax_ai)
+            draw_onnx_performance_panel(ax_onnx)
 
-        # Energy Meter
-        draw_energy_panel(ax_energy)
-
-        # AI Insights Panel
-        draw_ai_insights_panel(ax_ai)
-
-        # ONNX Performance Panel
-        draw_onnx_performance_panel(ax_onnx)
-
-        # Voltage Waveform
+        # Waveforms every frame (visual continuity matters)
         draw_waveform(ax_voltage, voltage_data, COLORS['voltage'],
                       'Voltage (Vrms)', 'V', y_min=195, y_max=260)
         if len(voltage_data) > 2:
@@ -870,18 +874,16 @@ try:
             ax_voltage.axhline(y=VOLTAGE_LOW, color=COLORS['warning'],
                               linewidth=0.7, alpha=0.3, linestyle='--')
 
-        # Current Waveform
         draw_waveform(ax_current, current_data, COLORS['current'],
                       'Current (A)', 'A')
 
-        # Power Waveform
         draw_waveform(ax_power, power_data, COLORS['power'],
                       'Power (W)', 'W')
 
         # Refresh
-        fig.canvas.draw_idle()
+        fig.canvas.draw()
         fig.canvas.flush_events()
-        plt.pause(0.01)
+        plt.pause(0.02)
 
 except KeyboardInterrupt:
     print("\n\n" + "═" * 60)
@@ -913,6 +915,11 @@ except Exception as e:
     traceback.print_exc()
 
 finally:
+    # Close CSV file handle
+    try:
+        _csv_fh.close()
+    except Exception:
+        pass
     # Stop Firebase uploader gracefully
     fb_uploader.stop()
     if ser and hasattr(ser, 'is_open'):

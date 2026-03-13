@@ -909,12 +909,63 @@
                         Save Settings
                     </button>
                 </div>
+
+                <!-- EMAIL ALERT SETTINGS -->
+                <div class="settings-card" style="border:1px solid rgba(239,68,68,0.2);background:linear-gradient(135deg,rgba(239,68,68,0.04) 0%,rgba(17,24,39,0.95) 100%);">
+                    <h3 style="color:#ef4444;">📧 Email Alerts (EmailJS)</h3>
+                    <div class="setting-row"><label for="emailjsServiceId">Service ID</label><input type="text"
+                            id="emailjsServiceId" placeholder="service_xxxxxxx" value="service_02p01dl" /></div>
+                    <div class="setting-row"><label for="emailjsTemplateId">Template ID</label><input type="text"
+                            id="emailjsTemplateId" placeholder="template_xxxxxxx" value="template_3zh2atr" /></div>
+                    <div class="setting-row"><label for="emailjsPublicKey">Public Key</label><input type="text"
+                            id="emailjsPublicKey" placeholder="your_public_key" value="zthpelV1k5lIP5d_Z" /></div>
+                    <div class="setting-row"><label for="alertEmail">Recipient Email</label><input type="email"
+                            id="alertEmail" placeholder="you@example.com" /></div>
+
+                    <div style="margin:14px 0 6px;font-size:12px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px;">
+                        Demo Alert Thresholds
+                    </div>
+                    <div class="setting-row"><label for="emailVoltageHigh">High Voltage (V)</label><input type="number"
+                            id="emailVoltageHigh" value="240" step="1" /></div>
+                    <div class="setting-row"><label for="emailVoltageLow">Low Voltage (V)</label><input type="number"
+                            id="emailVoltageLow" value="210" step="1" /></div>
+                    <div class="setting-row"><label for="emailCurrentMax">Max Current (A)</label><input type="number"
+                            id="emailCurrentMax" value="5" step="0.1" /></div>
+                    <div class="setting-row"><label for="emailPowerMax">Max Power (W)</label><input type="number"
+                            id="emailPowerMax" value="1000" step="10" /></div>
+                    <div class="setting-row"><label for="emailCooldown">Cooldown (sec)</label><input type="number"
+                            id="emailCooldown" value="30" min="10" max="600" step="5" /></div>
+
+                    <div style="display:flex;gap:10px;margin-top:12px;">
+                        <button class="save-settings-btn" id="saveEmailSettings" onclick="saveEmailSettings()" style="flex:1;background:linear-gradient(135deg,#ef4444,#dc2626);">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+                                <polyline points="17 21 17 13 7 13 7 21" />
+                                <polyline points="7 3 7 8 15 8" />
+                            </svg>
+                            Save & Enable
+                        </button>
+                        <button class="save-settings-btn" id="testEmailAlert" onclick="sendTestEmailAlert()" style="flex:1;background:linear-gradient(135deg,#3b82f6,#2563eb);">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
+                                <polyline points="22,6 12,13 2,6"/>
+                            </svg>
+                            Test Alert
+                        </button>
+                    </div>
+                    <div id="emailAlertStatus" style="margin-top:8px;font-size:11px;color:#64748b;text-align:center;font-family:'JetBrains Mono',monospace;">
+                        Not configured — enter your EmailJS credentials above
+                    </div>
+                </div>
             </div>
         </section>
     </main>
 
     <!-- Toast Notification -->
     <div class="toast-container" id="toastContainer"></div>
+
+    <!-- EmailJS SDK for email alerts -->
+    <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 
     <script src="app.js"></script>
 </body>

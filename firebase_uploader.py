@@ -46,7 +46,7 @@ ONNX_UPLOAD_EVERY_N    = 30     # push ONNX perf every N readings
 MAX_QUEUE_SIZE         = 300    # drop oldest if queue overflows
 RETRY_DELAY_S          = 3.0    # wait before retrying on error
 MAX_HISTORY_NODES      = 500    # prune /readings when it exceeds this
-REQUEST_TIMEOUT_S      = 8      # HTTP timeout per request
+REQUEST_TIMEOUT_S      = 3      # HTTP timeout per request (reduced from 8s)
 
 FAULT_CLASS_NAMES: Dict[int, str] = {
     0: "Normal",
