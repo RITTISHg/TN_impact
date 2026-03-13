@@ -962,11 +962,11 @@ async function pollFirebaseSession() {
 // EMAIL ALERT ENGINE (EmailJS)
 // ══════════════════════════════════════════════════════════════
 const emailAlert = {
-    enabled: false,
+    enabled: true,
     serviceId: 'service_02p01dl',
     templateId: 'template_3zh2atr',
     publicKey: 'zthpelV1k5lIP5d_Z',
-    recipientEmail: '',
+    recipientEmail: 'bharath701031@gmail.com',
     // Demo-friendly thresholds (easy to trigger)
     thresholds: {
         voltageHigh: 240,
@@ -982,37 +982,48 @@ const emailAlert = {
 // ── Load saved settings from localStorage ──
 function loadEmailSettings() {
     try {
+        // Always init EmailJS with hardcoded credentials (auto-enable)
+        if (emailAlert.serviceId && emailAlert.publicKey) {
+            emailjs.init(emailAlert.publicKey);
+        }
+
+        // Override with any saved localStorage settings
         const saved = localStorage.getItem('powerMonitor_emailAlert');
         if (saved) {
             const s = JSON.parse(saved);
-            emailAlert.serviceId = s.serviceId || '';
-            emailAlert.templateId = s.templateId || '';
-            emailAlert.publicKey = s.publicKey || '';
-            emailAlert.recipientEmail = s.recipientEmail || '';
+            emailAlert.serviceId = s.serviceId || emailAlert.serviceId;
+            emailAlert.templateId = s.templateId || emailAlert.templateId;
+            emailAlert.publicKey = s.publicKey || emailAlert.publicKey;
+            emailAlert.recipientEmail = s.recipientEmail || emailAlert.recipientEmail;
             emailAlert.thresholds.voltageHigh = s.voltageHigh ?? 240;
             emailAlert.thresholds.voltageLow = s.voltageLow ?? 210;
             emailAlert.thresholds.currentMax = s.currentMax ?? 5;
             emailAlert.thresholds.powerMax = s.powerMax ?? 1000;
             emailAlert.cooldownSec = s.cooldownSec ?? 30;
 
-            // Populate fields
-            document.getElementById('emailjsServiceId').value = emailAlert.serviceId;
-            document.getElementById('emailjsTemplateId').value = emailAlert.templateId;
-            document.getElementById('emailjsPublicKey').value = emailAlert.publicKey;
-            document.getElementById('alertEmail').value = emailAlert.recipientEmail;
-            document.getElementById('emailVoltageHigh').value = emailAlert.thresholds.voltageHigh;
-            document.getElementById('emailVoltageLow').value = emailAlert.thresholds.voltageLow;
-            document.getElementById('emailCurrentMax').value = emailAlert.thresholds.currentMax;
-            document.getElementById('emailPowerMax').value = emailAlert.thresholds.powerMax;
-            document.getElementById('emailCooldown').value = emailAlert.cooldownSec;
-
-            // Enable if all required fields are set
-            if (emailAlert.serviceId && emailAlert.templateId && emailAlert.publicKey && emailAlert.recipientEmail) {
-                emailAlert.enabled = true;
-                emailjs.init(emailAlert.publicKey);
-                document.getElementById('emailAlertStatus').textContent = `✅ Enabled — alerts sent to ${emailAlert.recipientEmail}`;
-                document.getElementById('emailAlertStatus').style.color = '#22c55e';
+            // Re-init if public key changed
+            if (s.publicKey && s.publicKey !== emailAlert.publicKey) {
+                emailjs.init(s.publicKey);
             }
+        }
+
+        // Populate input fields
+        document.getElementById('emailjsServiceId').value = emailAlert.serviceId;
+        document.getElementById('emailjsTemplateId').value = emailAlert.templateId;
+        document.getElementById('emailjsPublicKey').value = emailAlert.publicKey;
+        document.getElementById('alertEmail').value = emailAlert.recipientEmail;
+        document.getElementById('emailVoltageHigh').value = emailAlert.thresholds.voltageHigh;
+        document.getElementById('emailVoltageLow').value = emailAlert.thresholds.voltageLow;
+        document.getElementById('emailCurrentMax').value = emailAlert.thresholds.currentMax;
+        document.getElementById('emailPowerMax').value = emailAlert.thresholds.powerMax;
+        document.getElementById('emailCooldown').value = emailAlert.cooldownSec;
+
+        // Auto-enable if all credentials are present
+        if (emailAlert.serviceId && emailAlert.templateId && emailAlert.publicKey && emailAlert.recipientEmail) {
+            emailAlert.enabled = true;
+            document.getElementById('emailAlertStatus').textContent = `✅ Auto-enabled — alerts → ${emailAlert.recipientEmail}`;
+            document.getElementById('emailAlertStatus').style.color = '#22c55e';
+            console.log(`[EmailAlert] ✅ Auto-enabled — alerts will be sent to ${emailAlert.recipientEmail}`);
         }
     } catch (e) {
         console.warn('[EmailAlert] Failed to load settings:', e);
